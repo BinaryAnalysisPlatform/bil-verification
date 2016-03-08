@@ -1,0 +1,30 @@
+OASISFormat: 0.4
+Name:        bap-types
+Version:     0.2
+Synopsis:    BAP Core Library - Basic Types
+Authors:     BAP Team
+Maintainers: Ivan Gotovchits <ivg@ieee.org>
+License:     MIT
+Copyrights:  (C) 2014 arnegie Mellon University
+Plugins:     META (0.4), DevFiles (0.4)
+BuildTools: ocamlbuild
+BuildDepends: bap, 
+              bap.plugins, 
+              bap-traces, 
+              bap-piqi-traces, 
+              bap-piqi-traces.plugin, 
+              bap-plugin-llvm
+
+Library "veri"
+  Path: .
+  FindLibName: veri
+  BuildTools: ocamlbuild
+  Modules: Verify
+  CompiledObject: best
+
+Executable "main"
+  Path:           .
+  MainIs:         main.ml
+  Install:        false
+  CompiledObject: best
+  BuildDepends:   veri
