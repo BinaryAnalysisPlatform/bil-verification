@@ -3,17 +3,20 @@ Name:        bap-types
 Version:     0.2
 Synopsis:    BAP Core Library - Basic Types
 Authors:     BAP Team
-Maintainers: Ivan Gotovchits <ivg@ieee.org>
+Maintainers: Oleg Kamenkov <forown@yandex.ru>
 License:     MIT
-Copyrights:  (C) 2014 arnegie Mellon University
+Copyrights:  (C) 2014 Carnegie Mellon University
 Plugins:     META (0.4), DevFiles (0.4)
 BuildTools: ocamlbuild
 BuildDepends: bap, 
               bap.plugins, 
+              bap-plugin-llvm,
+              bap-plugin-x86,
+              bap-plugin-arm,
               bap-traces, 
               bap-piqi-traces, 
-              bap-piqi-traces.plugin, 
-              bap-plugin-llvm
+              bap-piqi-traces.plugin,               
+              findlib.dynload
 
 Library "veri"
   Path: .
@@ -27,4 +30,4 @@ Executable "main"
   MainIs:         main.ml
   Install:        false
   CompiledObject: best
-  BuildDepends:   veri
+  BuildDepends:   veri,  bap.plugins, findlib.dynload

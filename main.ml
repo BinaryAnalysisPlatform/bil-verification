@@ -1,51 +1,79 @@
 open Core_kernel.Std
 open Bap.Std
 open Bap_traces.Std
-
-
-
-let bk = 
-  match Image.available_backends () with
-  | [] -> 
-    Printf.printf "no backends .. exit\n ";
-    exit 1
-  | _ -> ()
+open Bap_plugins.Std
 
 let () = Frame_trace_plugin.register ()
-let arch = `x86_64
 
-let until_error arch trace =
-  let (module V : Verify.V) = Verify.create arch in
-  let v = V.create trace in
-  match V.until_mismatch v with
-  | None -> Printf.printf "none was returned\n"
-  | Some (right, wrong) ->
-    Printf.printf "error occured\n"
-    (* let right = right#bindings in *)
-    (* let wrong = wrong#bindings in *)
-    (* Seq.iter right ~f:(fun (v,r) -> *)
-    (*   Var.pp Format.std_formatter v) *)
-   
+module Test_x86 = struct
+  let arch = `x86
+  let uri = Uri.of_string "file:///home/oleg/factory/ls32.frame" 
+end
+
+module Test_arm = struct
+  let arch = `armv7
+  let uri = Uri.of_string "file:///home/oleg/factory/ls_arm.frame" 
+end
+
+open Test_x86
+
+let string_of_bindings binds = 
+  let pp (v,r) =
+    let value = Bil.Result.value r in
+    let ppv = Bil.Result.Value.pp in
+    Format.fprintf Format.str_formatter "%a = %a\n" Var.pp v ppv value in
+  Seq.iter binds ~f:pp;
+  Format.flush_str_formatter ()
+
+let print_bindings binds = 
+  Printf.printf "%s\n" (string_of_bindings binds)
+
 let run arch trace = 
   let (module V : Verify.V) = Verify.create arch in
   let v = V.execute trace in
-  V.correct v, V.incorrect v
+  V.right v, V.wrong v
 
 let step arch trace = 
   let (module V : Verify.V) = Verify.create arch in
   let v = V.create trace in
   match V.step v with
-  | Some v -> Some (V.correct v)
+  | Some v -> Some (V.right v)
   | None -> None
+
+let until_mismatch arch trace =
+  let (module V : Verify.V) = Verify.create arch in
+  let v = V.create trace in
+    match V.until_mismatch v with 
+    | None -> Printf.printf "no result"
+    | Some v -> 
+      let base,exec = V.context v in
+      let base_binds, exec_binds = base#bindings, exec#bindings in
+      Printf.printf "base %d:\n" (Seq.length base_binds);
+      print_bindings base_binds;
+      Printf.printf "exec %d:\n" (Seq.length exec_binds);
+      print_bindings exec_binds
+
+let until_mismatch_n arch trace n =  
+  let (module V : Verify.V) = Verify.create arch in
+  let rec run cnt v =
+    if cnt = n then Some v
+    else match V.until_mismatch v with 
+      | Some v -> run (cnt + 1) v
+      | None -> None in
+  let v = V.create trace in  
+  match run 0 v with 
+  | None -> Printf.printf "no result"
+  | Some v -> 
+    let base,exec = V.context v in
+    let base_binds, exec_binds = base#bindings, exec#bindings in
+    Printf.printf "base %d:\n" (Seq.length base_binds);
+    print_bindings base_binds;
+    Printf.printf "exec %d:\n" (Seq.length exec_binds);
+    print_bindings exec_binds
 
 let () =
   let open Result in
-  let uri = Uri.of_string "file:///home/oleg/factory/objdump32.frame" in  
   match Trace.load uri with
   | Error _ -> Printf.printf "error occures\n"
-  | Ok trace -> 
-    until_error arch trace
-    (* let c, i = run arch trace in *)
-    (* Printf.printf "result %d/%d\n" c i *)
-      
-                         
+  | Ok trace -> until_mismatch_n arch trace 2
+

@@ -10,10 +10,10 @@ module type V = sig
   val create : Trace.t -> t
   val execute: Trace.t -> t
   val step : t -> t option
-  val correct: t -> int
-  val incorrect: t -> int
-  val until_compare: t -> t option
-  val until_mismatch: t -> (Bili.context * Bili.context) option
+  val right: t -> int
+  val wrong: t -> int
+  val until_mismatch: t -> t option
+  val context: t -> Bili.context * Bili.context
 end
 
 module type A = sig
@@ -32,19 +32,44 @@ end
 
 module Verification(T : T) = struct
 
+  (** type context consists of two Bili.context. First one
+      represents evaluation of events like register_write,
+      memory_store and so on, i.e. events that explicitly
+      describes some side effects. Second context represents
+      evaluation of code_exec events, after lifting them with
+      appropriative lifter for current target *)
   type context = {
     base : Bili.context;
     exec : Bili.context; 
   } 
 
-  (** TODO: refine it. It's just a stub now, because is not-informable *)
+  (** type compare_unit describes a piece of program trace
+      as raw code and list of side effects that this code
+      (in best case) perofrms. *)
+  type compare_unit = {
+    code : Chunk.t;
+    side : event list;
+  }
+
+  (** TODO: think about returning this type  *)
+  type diverged = {
+    var   : var;
+    right : Bil.result;
+    wrong : Bil.result option;
+  }
+
+  (** TODO: refine it. It's just a stub now and it is not informable *)
   type result = {
-    correct   : int;
-    incorrect : int;
+    right : int;
+    wrong : int;
   } 
-  
+
+  type events_reader =
+    | Started of event * (event Seq.t)
+    | Finished
+
   type t = {
-    events  : Trace.event Seq.t;
+    events  : events_reader;
     result  : result;
     context : context;
   }
@@ -57,105 +82,111 @@ module Verification(T : T) = struct
     | Error _ -> None 
 
   let create trace =
-    let events = Trace.events trace in
+    let events = match Seq.next (Trace.events trace) with
+      | Some (ev, evs) -> Started (ev, evs)
+      | None -> Finished in
     let ctxt = new Bili.context in
     let context = {base = ctxt; exec = ctxt;} in
-    let result = { correct = 0; incorrect = 0; } in
-    { events; context; result; }
+    let result  = {right = 0; wrong = 0;} in
+    {events; context; result;}
 
-  let correct {result} = result.correct
-  let incorrect {result} = result.incorrect
+  let right {result} = result.right
+  let wrong {result} = result.wrong
+  let context {context} = context.base, context.exec
 
-  let bil_of_chunk chunk =
+  let insns_of_mem dis mem = 
     let open Or_error in
-    let rec disasm dis insns mem =
+    let rec loop insns mem =
       Dis.insn_of_mem dis mem >>= (fun (imem, insn, left) ->
           let insns' = match insn with 
             | Some insn -> (imem, insn) :: insns 
             | None -> insns in
           match left with
-          | `left mem -> disasm dis insns' mem 
+          | `left mem -> loop insns' mem 
           | `finished -> Ok (List.rev insns')) in 
+    loop [] mem
+
+  let bil_of_chunk chunk =
+    let open Or_error in
     Dis.with_disasm ~backend:"llvm" (Arch.to_string arch)
       ~f:(fun dis -> 
-        let dis = Dis.store_kinds dis |> Dis.store_asm in
-        let mems = Bigstring.of_string (Chunk.data chunk) in
-        Memory.create endian (Chunk.addr chunk) mems >>=
-        fun mem -> disasm dis [] mem >>| List.filter_map ~f:lift_insn)
+          let dis = Dis.store_kinds dis |> Dis.store_asm in
+          let mems = Bigstring.of_string (Chunk.data chunk) in
+          Memory.create endian (Chunk.addr chunk) mems >>=
+          fun mem -> insns_of_mem dis mem >>| 
+          List.filter_map ~f:lift_insn >>|
+          List.concat)
 
-  module type R = module type of Result
+  (** TODO: remove it later  *)
+  let string_of_bil b = 
+    Format.fprintf Format.str_formatter "%a" Bil.pp b;
+    Format.flush_str_formatter ()
 
-  let print_bindings binds = 
-    Seq.iter binds ~f:(fun (v,r) -> 
-      Var.pp Format.std_formatter v;
-      print_newline();
-      flush stdout)
+  (** TODO: remove it later  *)
+  let string_of_event e = 
+    Format.fprintf Format.str_formatter "%a" Value.pp e;
+    Format.flush_str_formatter ()
 
-  let eval_chunk ctxt chunk =
+  let eval_code ctxt chunk =
     match bil_of_chunk chunk with
     | Ok bil ->
-      List.fold_left ~init:ctxt
-        ~f:(fun ctxt bil -> Stmt.eval bil ctxt) bil
+      if List.length bil <> 0 then
+        Printf.printf "eval chunk %d\n" (List.length bil) ;
+      Printf.printf "%s\n" (string_of_bil bil);
+      Stmt.eval bil ctxt
     | Error er -> 
-      Printf.printf "error during chunk exec : %s\n" 
-      (Info.to_string_hum (Error.to_info er));
+      Printf.printf "error during chunk exec : %s\n"
+        (Info.to_string_hum (Error.to_info er));
       flush stdout;
       ctxt
 
-  (** [sync t] - replaces bindings from exec context for same 
-      variables from base context. *)
-  let sync ({context} as t) = 
-    let exec = Seq.fold ~init:context.exec 
-      ~f:(fun ctxt (var,_) -> 
-        match context.base#lookup var with 
-        | Some res -> ctxt#update var res
-        | None -> ctxt) context.exec#bindings in    
-    let context = { context with exec} in 
-    { t with context}
-
-  let compare_binds base executed =
-    Seq.fold base ~init:(0,0) ~f:(fun (cor,incor) (b, r) ->
-      match Seq.find executed ~f:(fun (b',_) -> Var.name b' = Var.name b) with
-      | None -> cor, incor + 1
-      | Some (_, r') -> 
-        if Bil.Result.value r = Bil.Result.value r' then cor + 1, incor
-        else cor, incor + 1)    
-    
-  let update_result t = 
-    let binds  = t.context.base#bindings in
-    let binds' = t.context.exec#bindings in
-    let cor, incor = compare_binds binds binds' in
-    let r = t.result in
-    let result = {correct = r.correct + cor; incorrect = r.incorrect + incor} in
-    {t with result}
-
-  let compare_stage t = update_result t |> sync
-
-  let eval_event t event =
+  let eval_event ctxt event =
     let open Trace in
-    let base = t.context.base in
-    let exec = t.context.base in
     Value.Match.(begin
         select @@
         case Event.register_write 
           (fun m -> 
              let cell,data = Move.(cell m, data m) in
              let b = Bil.(cell := int data) in
-             let base = Stmt.eval (b::[]) base in
-             let context = {t.context with base} in
-             {t with context}) @@
-        case Event.code_exec (fun c -> 
-            let exec = eval_chunk exec c in
-            let () = print_bindings exec#bindings in
-            let context = {t.context with exec} in
-            {t with context}) @@
-        default (fun () -> t)
+             Stmt.eval (b::[]) ctxt) @@
+        case Event.memory_store
+          (fun m ->              
+             Printf.printf "memory store: %s\n" (string_of_event event);
+             ctxt) @@
+        default (fun () -> ctxt)
       end) event
 
+  (** [sync t] - replaces bindings from exec context with same 
+      variables from base context. *)
+  let sync ({context} as t) =     
+    let exec = Seq.fold ~init:context.exec
+        ~f:(fun ctxt (var,res) -> ctxt#update var res) context.base#bindings in    
+    let context = { context with exec } in 
+    { t with context }
+
+  let compare_binds base executed =
+    Seq.fold base ~init:(0,0) ~f:(fun (cor,incor) (b, r) ->
+        match Seq.find executed ~f:(fun (b',_) -> Var.name b' = Var.name b) with
+        | None -> cor, incor + 1
+        | Some (_, r') -> 
+          if Bil.Result.value r = Bil.Result.value r' then cor + 1, incor
+          else cor, incor + 1)    
+
+  let update_result t = 
+    let binds  = t.context.base#bindings in
+    let binds' = t.context.exec#bindings in
+    let cor, incor = compare_binds binds binds' in
+    let r = t.result in
+    let result = {right = r.right + cor; wrong = r.wrong + incor} in
+    {t with result}
+
+  let compare_stage t = update_result t |> sync
+
+  (** TODO: remove it later  *)
   let string_of_event ev = 
     let open Event in
     Value.Match.(begin
-      select @@
+        select @@
         case register_write (fun m -> "register_write") @@
         case register_read (fun _ -> "register_read") @@
         case memory_load (fun _ -> "memory_load") @@
@@ -169,63 +200,60 @@ module Verification(T : T) = struct
         case modload (fun _ -> "modload") @@
         case code_exec (fun c -> "code_exec") @@
         default (fun () -> "unknown event")
-    end) ev 
+      end) ev 
 
-  let until_compare t = 
-    let rec run t events delayed =
-      match Seq.next events with
-      | None -> None
-      | Some (ev, events) ->
-        (* let () = Printf.printf "%s\n" (string_of_event ev) in *)
-        (* let () = flush stdout in *)
-        if Value.is Event.code_exec ev then 
-          match delayed with
-          | [] -> run (eval_event t ev) events []
-          | delayed -> 
-            let t' = List.fold_left ~init:t
-              ~f:eval_event (List.rev delayed) in
-            let t' = eval_event t' ev in
-            Some (compare_stage t')
-        else run t events (ev :: delayed) in       
-    run t t.events []
+  let perform_compare t point =
+    Printf.printf "events count %d\n" (List.length point.side + 1);
+    let base = List.fold_left ~init:t.context.base ~f:eval_event point.side in
+    let exec = eval_code t.context.exec point.code in
+    let context = {base; exec} in
+    let t' = {t with context } in
+    update_result t'
+  (* compare_stage t' *)
 
-  let until_mismatch t =
-    let rec run t = 
-      match until_compare t with
-      | None -> None
-      | Some t' -> 
-        if incorrect t = incorrect t' then run t' 
-        else Some (t'.context.base, t'.context.exec) in
-    run t
-    
-  (** TODO: [step] function relies on assumption
-      that events stored in trace in the following 
-      order: code_exec, move, move .. next code_exec ... 
-      So all comparies should be permormed before next
-      code_exec. This is the issue that should be 
-      discussed and refined.  *)
-  let step' t = 
-    match Seq.next t.events with 
-    | None -> None
-    | Some (ev, events) ->
-      let t' = 
-        if Value.is Event.code_exec ev then 
-          compare_stage t 
-        else t in     
-      let t' = eval_event t' ev in
-      let t' = {t' with events } in
-      Some t'
+  let next_compare_unit reader = 
+    let is_code = Value.is Event.code_exec in
+    let get_code_exn = Value.get_exn Event.code_exec in
+    let make_unit code side = match code with
+      | Some code -> Some {code = get_code_exn code; side;} 
+      | None -> None in
+    let rec run code side events = match Seq.next events with 
+      | None -> make_unit code (List.rev side), Finished
+      | Some (event, events') -> 
+        if is_code event then
+          match code with 
+          | None -> run (Some event) side events'
+          | Some code as code' -> 
+            let comp_unit = make_unit code' (List.rev side) in
+            comp_unit, Started (event, events')
+        else run code (event::side) events' in
+    match reader with 
+    | Finished -> None, reader
+    | Started (ev, evs) -> 
+      if is_code ev then run (Some ev) [] evs
+      else run None [ev] evs
 
   let step t = 
+    let p,events = next_compare_unit t.events in
+    let t' = {t with events} in
+    match p with
+    | Some p -> Some (perform_compare t' p)
+    | None -> None
+
+  (** TODO: same as previous,  *)
+  let until_mismatch t = 
     let r = t.result in
     let rec run t =
-      match step' t with 
-      | None -> None
-      | Some t -> 
-        if r = t.result then run t
-        else Some t in
+      let p, events = next_compare_unit t.events in
+      let t' = {t with events} in
+      match p with
+      | Some p -> 
+        let t' = perform_compare t' p in
+        if t'.result = r then run t'
+        else Some t'
+      | _ -> None in
     run t
-        
+
   let execute trace = 
     let t = create trace in
     let rec run t = match step t with 

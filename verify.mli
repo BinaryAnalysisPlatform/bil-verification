@@ -16,15 +16,16 @@ module type V = sig
       trace is not enough to do it. *)
   val step: t -> t option
 
-  (** [correct t] - returns a number of correct lifted instructions *)
-  val correct: t -> int
+  (** [right t] - returns a number of right lifted instructions *)
+  val right: t -> int
 
-  (** [incorrect t] - returns a number of incorrect lifted instructions *)
-  val incorrect: t -> int
+  (** [wrong t] - returns a number of wrong lifted instructions *)
+  val wrong: t -> int
+ 
+  (** [until_mismatch t] execute trace until first mismatch *)
+  val until_mismatch: t -> t option
 
-  val until_compare : t -> t option
-    
-  val until_mismatch: t -> (Bili.context * Bili.context) option
+  val context: t -> Bili.context * Bili.context
 
 end
 
