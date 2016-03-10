@@ -43,10 +43,10 @@ module Verification(T : T) = struct
     exec : Bili.context; 
   } 
 
-  (** type compare_unit describes a piece of program trace
+  (** type compare_point describes a piece of program trace
       as raw code and list of side effects that this code
       (in best case) perofrms. *)
-  type compare_unit = {
+  type compare_point = {
     code : Chunk.t;
     side : event list;
   }
@@ -130,8 +130,6 @@ module Verification(T : T) = struct
   let eval_code ctxt chunk =
     match bil_of_chunk chunk with
     | Ok bil ->
-      if List.length bil <> 0 then
-        Printf.printf "eval chunk %d\n" (List.length bil) ;
       Printf.printf "%s\n" (string_of_bil bil);
       Stmt.eval bil ctxt
     | Error er -> 
@@ -203,7 +201,6 @@ module Verification(T : T) = struct
       end) ev 
 
   let perform_compare t point =
-    Printf.printf "events count %d\n" (List.length point.side + 1);
     let base = List.fold_left ~init:t.context.base ~f:eval_event point.side in
     let exec = eval_code t.context.exec point.code in
     let context = {base; exec} in
@@ -211,21 +208,21 @@ module Verification(T : T) = struct
     update_result t'
   (* compare_stage t' *)
 
-  let next_compare_unit reader = 
+  let next_compare_point reader = 
     let is_code = Value.is Event.code_exec in
     let get_code_exn = Value.get_exn Event.code_exec in
-    let make_unit code side = match code with
+    let make_point code side = match code with
       | Some code -> Some {code = get_code_exn code; side;} 
       | None -> None in
     let rec run code side events = match Seq.next events with 
-      | None -> make_unit code (List.rev side), Finished
+      | None -> make_point code (List.rev side), Finished
       | Some (event, events') -> 
         if is_code event then
           match code with 
           | None -> run (Some event) side events'
           | Some code as code' -> 
-            let comp_unit = make_unit code' (List.rev side) in
-            comp_unit, Started (event, events')
+            let comp_point = make_point code' (List.rev side) in
+            comp_point, Started (event, events')
         else run code (event::side) events' in
     match reader with 
     | Finished -> None, reader
@@ -234,17 +231,16 @@ module Verification(T : T) = struct
       else run None [ev] evs
 
   let step t = 
-    let p,events = next_compare_unit t.events in
+    let p,events = next_compare_point t.events in
     let t' = {t with events} in
     match p with
     | Some p -> Some (perform_compare t' p)
     | None -> None
 
-  (** TODO: same as previous,  *)
   let until_mismatch t = 
     let r = t.result in
     let rec run t =
-      let p, events = next_compare_unit t.events in
+      let p, events = next_compare_point t.events in
       let t' = {t with events} in
       match p with
       | Some p -> 
