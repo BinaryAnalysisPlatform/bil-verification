@@ -5,6 +5,24 @@ open Trace
 
 module Dis = Disasm_expert.Basic
 
+module Diverged = struct
+  type t = {
+    var : var;
+    ok : Bil.result;
+    er : Bil.result option;
+  } [@@deriving fields]
+
+  let pp fmt t = 
+    let to_value = Bil.Result.value in
+    let ppv = Bil.Result.Value.pp in
+    let ppo fmt = function 
+      | Some v -> Format.fprintf fmt "%a" ppv (to_value v) 
+      | None -> Format.fprintf fmt "none" in
+    Format.fprintf fmt "%a: error %a (%a)\n"
+      Var.pp t.var ppo t.er ppv (to_value t.ok)
+
+end
+
 module type V = sig
   type t
   val create : Trace.t -> t
@@ -12,8 +30,8 @@ module type V = sig
   val step : t -> t option
   val right: t -> int
   val wrong: t -> int
-  val until_mismatch: t -> t option
-  val context: t -> Bili.context * Bili.context
+  val until_mismatch: t -> t option      
+  val diverged: t -> Diverged.t list
 end
 
 module type A = sig
@@ -51,13 +69,6 @@ module Verification(T : T) = struct
     side : event list;
   }
 
-  (** TODO: think about returning this type  *)
-  type diverged = {
-    var   : var;
-    right : Bil.result;
-    wrong : Bil.result option;
-  }
-
   (** TODO: refine it. It's just a stub now and it is not informable *)
   type result = {
     right : int;
@@ -72,10 +83,14 @@ module Verification(T : T) = struct
     events  : events_reader;
     result  : result;
     context : context;
+    diverged: Diverged.t list;
   }
 
   let arch = T.arch
   let endian = Arch.endian arch
+  let right {result} = result.right
+  let wrong {result} = result.wrong
+  let diverged t = t.diverged
 
   let lift_insn (mem,insn) = match T.lift mem insn with
     | Ok b -> Some b
@@ -88,11 +103,7 @@ module Verification(T : T) = struct
     let ctxt = new Bili.context in
     let context = {base = ctxt; exec = ctxt;} in
     let result  = {right = 0; wrong = 0;} in
-    {events; context; result;}
-
-  let right {result} = result.right
-  let wrong {result} = result.wrong
-  let context {context} = context.base, context.exec
+    {events; context; result; diverged = []; }
 
   let insns_of_mem dis mem = 
     let open Or_error in
@@ -109,11 +120,11 @@ module Verification(T : T) = struct
   let bil_of_chunk chunk =
     let open Or_error in
     Dis.with_disasm ~backend:"llvm" (Arch.to_string arch)
-      ~f:(fun dis -> 
+      ~f:(fun dis ->
           let dis = Dis.store_kinds dis |> Dis.store_asm in
           let mems = Bigstring.of_string (Chunk.data chunk) in
           Memory.create endian (Chunk.addr chunk) mems >>=
-          fun mem -> insns_of_mem dis mem >>| 
+          fun mem -> insns_of_mem dis mem >>|
           List.filter_map ~f:lift_insn >>|
           List.concat)
 
@@ -130,6 +141,7 @@ module Verification(T : T) = struct
   let eval_code ctxt chunk =
     match bil_of_chunk chunk with
     | Ok bil ->
+      Printf.printf "code: ";
       Printf.printf "%s\n" (string_of_bil bil);
       Stmt.eval bil ctxt
     | Error er -> 
@@ -138,19 +150,31 @@ module Verification(T : T) = struct
       flush stdout;
       ctxt
 
+  let var_of_addr addr = 
+    let name = Bitvector.string_of_value ~hex:true addr in
+    let size = Size.of_int_exn (Bitvector.bitwidth addr) in
+    let typ  = Type.(Mem (Arch.addr_size arch, size)) in
+    Var.create name typ
+
+  (** TODO: rewrite memory_store  *)
   let eval_event ctxt event =
     let open Trace in
+    let content m = Move.(cell m, data m) in
     Value.Match.(begin
         select @@
         case Event.register_write 
           (fun m -> 
-             let cell,data = Move.(cell m, data m) in
+             Printf.printf "register_write: %s\n" (string_of_event event);
+             let cell,data = content m in
              let b = Bil.(cell := int data) in
              Stmt.eval (b::[]) ctxt) @@
         case Event.memory_store
-          (fun m ->              
+          (fun m -> 
              Printf.printf "memory store: %s\n" (string_of_event event);
-             ctxt) @@
+             let addr,data = content m in
+             let data = Bil.int data in
+             let b = Bil.move (var_of_addr addr) data in
+             Stmt.eval (b::[]) ctxt) @@
         default (fun () -> ctxt)
       end) event
 
@@ -162,43 +186,28 @@ module Verification(T : T) = struct
     let context = { context with exec } in 
     { t with context }
 
-  let compare_binds base executed =
-    Seq.fold base ~init:(0,0) ~f:(fun (cor,incor) (b, r) ->
-        match Seq.find executed ~f:(fun (b',_) -> Var.name b' = Var.name b) with
-        | None -> cor, incor + 1
-        | Some (_, r') -> 
-          if Bil.Result.value r = Bil.Result.value r' then cor + 1, incor
-          else cor, incor + 1)    
-
+  let eval_result {base; exec} = 
+    let open Diverged in
+    let find_in_exec v = 
+      Seq.find exec#bindings ~f:(fun (v',_) -> Var.name v = Var.name v') in
+    let f (diverged, correct) (var, res) = 
+      match find_in_exec var with
+      | None -> {var; ok=res; er=None} :: diverged, correct
+      | Some (_, res') -> 
+        if Bil.Result.value res = Bil.Result.value res' then 
+          diverged, correct + 1
+        else 
+          {var; ok = res; er = Some res'} :: diverged, correct
+    in 
+    let diverged, correct = Seq.fold ~f ~init:([],0) base#bindings in
+    diverged, correct, List.length diverged
+    
   let update_result t = 
-    let binds  = t.context.base#bindings in
-    let binds' = t.context.exec#bindings in
-    let cor, incor = compare_binds binds binds' in
+    let diverged, cor, incor = eval_result t.context in
     let r = t.result in
     let result = {right = r.right + cor; wrong = r.wrong + incor} in
-    {t with result}
-
-  let compare_stage t = update_result t |> sync
-
-  (** TODO: remove it later  *)
-  let string_of_event ev = 
-    let open Event in
-    Value.Match.(begin
-        select @@
-        case register_write (fun m -> "register_write") @@
-        case register_read (fun _ -> "register_read") @@
-        case memory_load (fun _ -> "memory_load") @@
-        case memory_store (fun _ -> "memory_store") @@
-        case timestamp (fun _ -> "timestamp") @@
-        case pc_update (fun _ -> "pc_update") @@
-        case context_switch (fun _ -> "context_switch") @@
-        case exn (fun _ -> "exn") @@
-        case call (fun _ -> "call") @@
-        case return (fun _ -> "return") @@
-        case modload (fun _ -> "modload") @@
-        case code_exec (fun c -> "code_exec") @@
-        default (fun () -> "unknown event")
-      end) ev 
+    let t' = {t with result; diverged} in
+    sync t'
 
   let perform_compare t point =
     let base = List.fold_left ~init:t.context.base ~f:eval_event point.side in
@@ -206,7 +215,6 @@ module Verification(T : T) = struct
     let context = {base; exec} in
     let t' = {t with context } in
     update_result t'
-  (* compare_stage t' *)
 
   let next_compare_point reader = 
     let is_code = Value.is Event.code_exec in

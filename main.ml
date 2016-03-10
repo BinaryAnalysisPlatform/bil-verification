@@ -40,18 +40,15 @@ let step arch trace =
   | Some v -> Some (V.right v)
   | None -> None
 
+let print_diverged = 
+  List.iter ~f:(Verify.Diverged.pp Format.std_formatter) 
+
 let until_mismatch arch trace =
   let (module V : Verify.V) = Verify.create arch in
   let v = V.create trace in
-    match V.until_mismatch v with 
-    | None -> Printf.printf "no result"
-    | Some v -> 
-      let base,exec = V.context v in
-      let base_binds, exec_binds = base#bindings, exec#bindings in
-      Printf.printf "base %d:\n" (Seq.length base_binds);
-      print_bindings base_binds;
-      Printf.printf "exec %d:\n" (Seq.length exec_binds);
-      print_bindings exec_binds
+  match V.until_mismatch v with 
+  | None -> Printf.printf "no result"
+  | Some v -> print_diverged (V.diverged v)
 
 let until_mismatch_n arch trace n =  
   let (module V : Verify.V) = Verify.create arch in
@@ -63,13 +60,7 @@ let until_mismatch_n arch trace n =
   let v = V.create trace in  
   match run 0 v with 
   | None -> Printf.printf "no result"
-  | Some v -> 
-    let base,exec = V.context v in
-    let base_binds, exec_binds = base#bindings, exec#bindings in
-    Printf.printf "base %d:\n" (Seq.length base_binds);
-    print_bindings base_binds;
-    Printf.printf "exec %d:\n" (Seq.length exec_binds);
-    print_bindings exec_binds
+  | Some v -> print_diverged (V.diverged v)
 
 let () =
   let open Result in

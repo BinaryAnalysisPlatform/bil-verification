@@ -16,7 +16,8 @@ BuildDepends: bap,
               bap-traces, 
               bap-piqi-traces, 
               bap-piqi-traces.plugin,               
-              findlib.dynload
+              findlib.dynload,
+              ppx_fields_conv
 
 Library "veri"
   Path: .
@@ -30,4 +31,4 @@ Executable "main"
   MainIs:         main.ml
   Install:        false
   CompiledObject: best
-  BuildDepends:   veri,  bap.plugins, findlib.dynload
+  BuildDepends:   veri

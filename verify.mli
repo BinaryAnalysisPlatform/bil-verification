@@ -1,6 +1,14 @@
 open Bap.Std
 open Bap_traces.Std
 
+module Diverged : sig
+  type t
+  val var: t -> var
+  val ok: t -> Bil.result
+  val er: t -> Bil.result option
+  val pp: Format.formatter -> t -> unit
+end
+
 module type V = sig
 
   type t
@@ -25,7 +33,10 @@ module type V = sig
   (** [until_mismatch t] execute trace until first mismatch *)
   val until_mismatch: t -> t option
 
-  val context: t -> Bili.context * Bili.context
+  (** [diverged t] - returns a list of diverged variables after last
+      {step} call, i.e. such variables that were evaluated to wrong 
+      result or weren't come to evaluation context at all. *)
+  val diverged: t -> Diverged.t list 
 
 end
 
