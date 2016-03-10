@@ -65,6 +65,6 @@ let until_mismatch_n arch trace n =
 let () =
   let open Result in
   match Trace.load uri with
-  | Error _ -> Printf.printf "error occures\n"
+  | Error er -> Printf.printf "error occured\n"
   | Ok trace -> until_mismatch_n arch trace 2
 
