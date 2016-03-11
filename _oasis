@@ -8,14 +8,14 @@ License:     MIT
 Copyrights:  (C) 2014 Carnegie Mellon University
 Plugins:     META (0.4), DevFiles (0.4)
 BuildTools: ocamlbuild
-BuildDepends: bap, 
-              bap.plugins, 
+BuildDepends: bap,
+              bap.plugins,
               bap-plugin-llvm,
               bap-plugin-x86,
               bap-plugin-arm,
-              bap-traces, 
-              bap-piqi-traces, 
-              bap-piqi-traces.plugin,               
+              bap-traces,
+              bap-piqi-traces,
+              bap-piqi-traces.plugin,
               findlib.dynload,
               ppx_fields_conv
 
@@ -23,7 +23,7 @@ Library "veri"
   Path: .
   FindLibName: veri
   BuildTools: ocamlbuild
-  Modules: Verify
+  Modules: Verify, Diff, Veri_context
   CompiledObject: best
 
 Executable "main"

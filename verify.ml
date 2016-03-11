@@ -5,29 +5,6 @@ open Trace
 
 module Dis = Disasm_expert.Basic
 
-module Diff = struct
-  
-  type 'a diff = {
-    src : 'a;
-    ok  : word;
-    er  : word option
-  }
-
-  type t = Imm of var diff | Mem of addr diff
-
-  let pp fmt t =
-    let ppo fmt = function
-      | Some v -> Format.fprintf fmt "%a" Word.pp v
-      | None -> Format.fprintf fmt "none" in
-    let pp pp_src src ok er = 
-      Format.fprintf fmt "%a: error %a (%a)\n"
-        pp_src src ppo er Word.pp ok in 
-    match t with 
-    | Imm t -> pp Var.pp t.src t.ok t.er
-    | Mem t -> pp Addr.pp t.src t.ok t.er
-
-end
-
 module type V = sig
   type t
   val create : Trace.t -> t
@@ -35,8 +12,9 @@ module type V = sig
   val step : t -> t option
   val right: t -> int
   val wrong: t -> int
+  val histo: t -> (string * int) list
   val until_mismatch: t -> t option
-  val diverged: t -> Diff.t list
+  val diff: t -> Diff.t list
 end
 
 module type A = sig
@@ -53,96 +31,20 @@ module Make(A:A)(Target:Target) : T = struct
   include A
 end
 
-module Context(Target:Target)= struct
-
-  type vars = word Var.Table.t
-  type mems = word Addr.Table.t
-
-  type t = {
-    vars : vars;
-    mems : mems;
-  }
-
-  let create () = { 
-    vars = Var.Table.create (); 
-    mems = Addr.Table.create ();
-  }
- 
-  let to_bili_context t = 
-    let ctxt = Var.Table.fold t.vars ~init:(new Bili.context)
-        ~f:(fun ~key ~data ctxt ->
-            let ctxt,r = ctxt#create_word data in
-            ctxt#update key r) in
-    let s = Addr.Table.fold t.mems ~init:(new Bil.Storage.sparse)
-        ~f:(fun ~key ~data s -> s#save key data) in
-    let ctxt, r = ctxt#create_storage s in
-    ctxt#update Target.CPU.mem r
-
-  let update_var t var word = Var.Table.set t.vars ~key:var ~data:word
-  let update_mem t addr word = Addr.Table.set t.mems ~key:addr ~data:word
-
-  let storage_of_result v = 
-    let open Bil in
-    match Result.value v with 
-    | Mem s -> Some s
-    | _ -> None
-      
-  let word_of_result v = 
-    let open Bil in
-    match Result.value v with
-    | Imm w -> Some w
-    | _ -> None
-
-  let vars_diff t ctxt = 
-    let open Diff in
-    let add diff src ok er = (Imm {src; ok; er})::diff in
-    Var.Table.fold t.vars ~init:[] ~f:(fun ~key ~data diff ->
-        match ctxt#lookup key with
-        | None -> add diff key data None
-        | Some r -> match word_of_result r with 
-          | Some w -> 
-            if data = w then diff 
-            else add diff key data (Some w)
-          | _ -> add diff key data None) 
-      
-  let mems_diff t ctxt = 
-    let open Diff in
-    let add diff src ok er = (Mem {src; ok; er})::diff in
-    let all () = 
-      Addr.Table.fold t.mems ~init:[]
-        ~f:(fun ~key ~data diff -> add diff key data None) in
-    match ctxt#lookup Target.CPU.mem with
-    | None -> all ()
-    | Some r -> match storage_of_result r with
-      | None -> all ()
-      | Some s ->
-        Addr.Table.fold t.mems ~init:[] ~f:(fun ~key ~data diff ->
-            match s#load key with
-            | None -> add diff key data None
-            | Some w -> 
-              if w = data then diff
-              else add diff key data (Some w))
-
-  let diff t ctxt = vars_diff t ctxt @ mems_diff t ctxt
-
-end
-
 module Verification(T : T) = struct
-
-  module Context = Context(T)
 
   (** type compare_point describes a piece of program trace
       as raw code and list of side effects that this code
-      should perofrm. *)
+      should perform. *)
   type compare_point = {
     code : Chunk.t;
     side : event list;
   }
 
-  (** TODO: refine it. It's just a stub now and it is not informable *)
   type result = {
     right : int;
     wrong : int;
+    histo : int String.Table.t;
   } 
 
   type events_reader =
@@ -152,7 +54,7 @@ module Verification(T : T) = struct
   type t = {
     events  : events_reader;
     result  : result;
-    context : Context.t;
+    context : Veri_context.t;
     diff    : Diff.t list;
   }
 
@@ -160,7 +62,8 @@ module Verification(T : T) = struct
   let endian = Arch.endian arch
   let right {result} = result.right
   let wrong {result} = result.wrong
-  let diverged t = t.diff
+  let histo {result} = String.Table.to_alist result.histo
+  let diff t = t.diff
 
   let lift_insn (mem,insn) = match T.lift mem insn with
     | Ok b -> Some b
@@ -170,16 +73,22 @@ module Verification(T : T) = struct
     let events = match Seq.next (Trace.events trace) with
       | Some (ev, evs) -> Started (ev, evs)
       | None -> Finished in
-    let context = Context.create () in
-    let result  = {right = 0; wrong = 0;} in
+    let context = Veri_context.of_memory T.CPU.mem in
+    let result  = {right = 0; wrong = 0; histo = String.Table.create ();} in
     {events; context; result; diff = []; }
+
+  let print_name insn = 
+    let insn' = Insn.of_basic insn in
+    Printf.printf "insn: %s\n" (Insn.name insn')
 
   let insns_of_mem dis mem = 
     let open Or_error in
     let rec loop insns mem =
       Dis.insn_of_mem dis mem >>= (fun (imem, insn, left) ->
           let insns' = match insn with 
-            | Some insn -> (imem, insn) :: insns 
+            | Some insn -> 
+              print_name insn;
+              (imem, insn) :: insns 
             | None -> insns in
           match left with
           | `left mem -> loop insns' mem 
@@ -226,22 +135,33 @@ module Verification(T : T) = struct
         select @@
         case Event.register_write 
           (fun m -> 
-             Printf.printf "register_write: %s\n" (string_of_event event);
              let cell,data = content m in
-             Context.update_var context cell data) @@
+             Veri_context.update_var context cell data) @@
         case Event.memory_store
           (fun m -> 
-             Printf.printf "memory store: %s\n" (string_of_event event);
              let addr,data = content m in
-             Context.update_mem context addr data) @@
+             Veri_context.update_mem context addr data) @@
         default (fun () -> ())
       end) event
-  
+
+  (** TODO : remove it  *)
+  let string_of_bindings binds = 
+    let pp (v,r) =
+      let value = Bil.Result.value r in
+      let ppv = Bil.Result.Value.pp in
+      Format.fprintf Format.str_formatter "%a = %a\n" Var.pp v ppv value in
+    Seq.iter binds ~f:pp;
+    Format.flush_str_formatter ()
+
+  (** TODO : remove it  *)
+  let print_bindings binds = 
+    Printf.printf "binds: %s\n" (string_of_bindings binds)
+
   let perform_compare t point =
-    let exec_ctxt = Context.to_bili_context t.context in
+    let exec_ctxt = Veri_context.to_bili_context t.context in
     let exec_ctxt' = eval_code exec_ctxt point.code in
     let () = List.iter ~f:(eval_event t.context) point.side in
-    let diff = Context.diff t.context exec_ctxt' in
+    let diff = Veri_context.diff t.context exec_ctxt' in
     {t with diff }
 
   let next_compare_point reader = 

@@ -1,17 +1,6 @@
 open Bap.Std
 open Bap_traces.Std
 
-module Diff : sig
-  type 'a diff = {
-    src : 'a;
-    ok  : word;
-    er  : word option
-  }
-
-  type t = Imm of var diff | Mem of addr diff
-  val pp: Format.formatter -> t -> unit
-end
-
 module type V = sig
 
   type t
@@ -32,14 +21,18 @@ module type V = sig
 
   (** [wrong t] - returns a number of wrong lifted instructions *)
   val wrong: t -> int
+
+  (** [histo] returns a list of instructions paired with number
+      of wrong lifting cases. *)
+  val histo: t -> (string * int) list
  
   (** [until_mismatch t] execute trace until first mismatch *)
   val until_mismatch: t -> t option
 
-  (** [diverged t] - returns a list of diverged variables after last
-      {step} call, i.e. such variables that were evaluated to wrong 
+  (** [diff t] - returns a list of diverged variables after last
+      compare, i.e. such variables that were evaluated to wrong 
       result or weren't come to evaluation context at all. *)
-  val diverged: t -> Diff.t list 
+  val diff: t -> Diff.t list 
 
 end
 
