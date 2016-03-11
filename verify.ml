@@ -9,12 +9,8 @@ module type V = sig
   type t
   val create : Trace.t -> t
   val execute: Trace.t -> t
-  val step : t -> t option
-  val right: t -> int
-  val wrong: t -> int
-  val histo: t -> (string * int) list
-  val until_mismatch: t -> t option
-  val diff: t -> Diff.t list
+  val until_mismatch: t -> Diff.t list * t option
+  val stat: t -> Stat.t
 end
 
 module type A = sig
@@ -41,29 +37,17 @@ module Verification(T : T) = struct
     side : event list;
   }
 
-  type result = {
-    right : int;
-    wrong : int;
-    histo : int String.Table.t;
-  } 
-
   type events_reader =
     | Started of event * (event Seq.t)
     | Finished
 
   type t = {
     events  : events_reader;
-    result  : result;
+    result  : Stat.t;
     context : Veri_context.t;
-    diff    : Diff.t list;
   }
 
-  let arch = T.arch
-  let endian = Arch.endian arch
-  let right {result} = result.right
-  let wrong {result} = result.wrong
-  let histo {result} = String.Table.to_alist result.histo
-  let diff t = t.diff
+  let endian = Arch.endian T.arch
 
   let lift_insn (mem,insn) = match T.lift mem insn with
     | Ok b -> Some b
@@ -74,9 +58,12 @@ module Verification(T : T) = struct
       | Some (ev, evs) -> Started (ev, evs)
       | None -> Finished in
     let context = Veri_context.of_memory T.CPU.mem in
-    let result  = {right = 0; wrong = 0; histo = String.Table.create ();} in
-    {events; context; result; diff = []; }
+    let result  = Stat.create () in
+    {events; context; result;}
 
+  let stat t = t.result
+
+  (** TODO: remove it later  *)
   let print_name insn = 
     let insn' = Insn.of_basic insn in
     Printf.printf "insn: %s\n" (Insn.name insn')
@@ -86,25 +73,21 @@ module Verification(T : T) = struct
     let rec loop insns mem =
       Dis.insn_of_mem dis mem >>= (fun (imem, insn, left) ->
           let insns' = match insn with 
-            | Some insn -> 
-              print_name insn;
-              (imem, insn) :: insns 
+            | Some insn -> (imem, insn) :: insns 
             | None -> insns in
           match left with
           | `left mem -> loop insns' mem 
           | `finished -> Ok (List.rev insns')) in 
     loop [] mem
 
-  let bil_of_chunk chunk =
+  let insns_of_chunk chunk =
     let open Or_error in
-    Dis.with_disasm ~backend:"llvm" (Arch.to_string arch)
+    Dis.with_disasm ~backend:"llvm" (Arch.to_string T.arch)
       ~f:(fun dis ->
           let dis = Dis.store_kinds dis |> Dis.store_asm in
           let mems = Bigstring.of_string (Chunk.data chunk) in
           Memory.create endian (Chunk.addr chunk) mems >>=
-          fun mem -> insns_of_mem dis mem >>|
-          List.filter_map ~f:lift_insn >>|
-          List.concat)
+          fun mem -> insns_of_mem dis mem)
 
   (** TODO: remove it later  *)
   let string_of_bil b = 
@@ -115,19 +98,7 @@ module Verification(T : T) = struct
   let string_of_event e = 
     Format.fprintf Format.str_formatter "%a" Value.pp e;
     Format.flush_str_formatter ()
-
-  let eval_code ctxt chunk =
-    match bil_of_chunk chunk with
-    | Ok bil ->
-      Printf.printf "code: ";
-      Printf.printf "%s\n" (string_of_bil bil);
-      Stmt.eval bil ctxt
-    | Error er -> 
-      Printf.printf "error during chunk exec : %s\n"
-        (Info.to_string_hum (Error.to_info er));
-      flush stdout;
-      ctxt
-
+  
   let eval_event context event =
     let open Trace in
     let content m = Move.(cell m, data m) in
@@ -157,12 +128,34 @@ module Verification(T : T) = struct
   let print_bindings binds = 
     Printf.printf "binds: %s\n" (string_of_bindings binds)
 
+  (** [name_of_insns insns] returns a name of last
+      instruction in [insns] list *)
+  let name_of_insns insns = match (List.rev insns) with 
+    | [] -> None
+    | (_,insn)::_ -> Some Insn.(name (of_basic insn))
+
+  let update_histo t = function 
+    | [] -> ()
+    | insns -> 
+      let (_, insn) = List.hd_exn (List.rev insns) in
+      let name = Insn.(name (of_basic insn)) in
+      Stat.succ_histo t.result name
+  
   let perform_compare t point =
-    let exec_ctxt = Veri_context.to_bili_context t.context in
-    let exec_ctxt' = eval_code exec_ctxt point.code in
-    let () = List.iter ~f:(eval_event t.context) point.side in
-    let diff = Veri_context.diff t.context exec_ctxt' in
-    {t with diff }
+    match insns_of_chunk point.code with
+    | Error _ -> 
+      let result = Stat.succ_undef t.result in
+      [], {t with result}
+    | Ok insns -> 
+      let bil = List.filter_map ~f:lift_insn insns |> List.concat in     
+      let exec_ctxt = Veri_context.to_bili_context t.context in
+      let exec_ctxt' = Stmt.eval bil exec_ctxt in
+      let () = List.iter ~f:(eval_event t.context) point.side in
+      match Veri_context.diff t.context exec_ctxt' with
+      | [] -> [], t
+      | diff -> 
+        update_histo t insns;
+        diff,t
 
   let next_compare_point reader = 
     let is_code = Value.is Event.code_exec in
@@ -186,24 +179,29 @@ module Verification(T : T) = struct
       if is_code ev then run (Some ev) [] evs
       else run None [ev] evs
 
+  (** [step t] - processes such number events from trace, that are needed
+      to get next compare result. And returns None if number events in a 
+      trace is not enough to do it. *)
   let step t = 
     let p,events = next_compare_point t.events in
     let t' = {t with events} in
     match p with
-    | Some p -> Some (perform_compare t' p)
+    | Some p -> 
+      let _, t' = perform_compare t' p in
+      Some t'
     | None -> None
 
   let until_mismatch t = 
-    let r = t.diff in
     let rec run t =
       let p, events = next_compare_point t.events in
       let t' = {t with events} in
       match p with
+      | None -> [], None 
       | Some p -> 
-        let t' = perform_compare t' p in
-        if t'.diff = r then run t'
-        else Some t'
-      | _ -> None in
+        let diff, t' = perform_compare t' p in
+        match diff with 
+        | [] -> run t' 
+        | diff -> diff, Some t' in
     run t
 
   let execute trace = 

@@ -31,15 +31,8 @@ let print_bindings binds =
 let run arch trace = 
   let (module V : Verify.V) = Verify.create arch in
   let v = V.execute trace in
-  let h = V.histo v in
+  let h = Stat.histo (V.stat v) in
   List.iter ~f:(fun (name, times) -> Printf.printf "%s %d\n" name times) h
-
-let step arch trace = 
-  let (module V : Verify.V) = Verify.create arch in
-  let v = V.create trace in
-  match V.step v with
-  | Some v -> Some (V.right v)
-  | None -> None
 
 let print_diverged = 
   List.iter ~f:(Diff.pp Format.std_formatter) 
@@ -48,21 +41,21 @@ let until_mismatch arch trace =
   let (module V : Verify.V) = Verify.create arch in
   let v = V.create trace in
   match V.until_mismatch v with 
-  | None -> Printf.printf "no result"
-  | Some v -> print_diverged (V.diff v)
+  | [],_ -> Printf.printf "no result"
+  | diff,_ -> print_diverged diff
 
 let until_mismatch_n arch trace n =  
   let (module V : Verify.V) = Verify.create arch in
-  let rec run cnt v =
-    if cnt = n then Some v
+  let rec run last_diff cnt v =
+    if cnt = n then last_diff
     else match V.until_mismatch v with 
-      | Some v -> run (cnt + 1) v
-      | None -> None in
+      | diff, Some v -> run diff (cnt + 1) v
+      | diff, None -> diff in
   let v = V.create trace in  
-  match run 0 v with 
-  | None -> Printf.printf "no result"
-  | Some v -> 
-    print_diverged (V.diff v);
+  match run [] 0 v with 
+  | [] -> Printf.printf "no result"
+  | diff -> 
+    print_diverged diff;
     print_newline ()
 
 let () =
@@ -70,5 +63,3 @@ let () =
   match Trace.load uri with
   | Error er -> Printf.printf "error occured\n"
   | Ok trace -> run arch trace
-
-
