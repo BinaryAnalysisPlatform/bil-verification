@@ -1,11 +1,14 @@
 open Bap.Std
 open Bap_traces.Std
 
-module Diverged : sig
-  type t
-  val var: t -> var
-  val ok: t -> Bil.result
-  val er: t -> Bil.result option
+module Diff : sig
+  type 'a diff = {
+    src : 'a;
+    ok  : word;
+    er  : word option
+  }
+
+  type t = Imm of var diff | Mem of addr diff
   val pp: Format.formatter -> t -> unit
 end
 
@@ -36,9 +39,7 @@ module type V = sig
   (** [diverged t] - returns a list of diverged variables after last
       {step} call, i.e. such variables that were evaluated to wrong 
       result or weren't come to evaluation context at all. *)
-  val diverged: t -> Diverged.t list 
-
-  val context: t -> Bili.context * Bili.context
+  val diverged: t -> Diff.t list 
 
 end
 

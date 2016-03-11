@@ -41,7 +41,7 @@ let step arch trace =
   | None -> None
 
 let print_diverged = 
-  List.iter ~f:(Verify.Diverged.pp Format.std_formatter) 
+  List.iter ~f:(Verify.Diff.pp Format.std_formatter) 
 
 let until_mismatch arch trace =
   let (module V : Verify.V) = Verify.create arch in
@@ -62,13 +62,11 @@ let until_mismatch_n arch trace n =
   | None -> Printf.printf "no result"
   | Some v -> 
     print_diverged (V.diverged v);
-    print_newline ();
-    let _, e = V.context v in
-    print_bindings e#bindings
+    print_newline ()
 
 let () =
   let open Result in
   match Trace.load uri with
   | Error er -> Printf.printf "error occured\n"
-  | Ok trace -> until_mismatch_n arch trace 2
+  | Ok trace -> until_mismatch arch trace 
 

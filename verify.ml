@@ -5,21 +5,26 @@ open Trace
 
 module Dis = Disasm_expert.Basic
 
-module Diverged = struct
-  type t = {
-    var : var;
-    ok : Bil.result;
-    er : Bil.result option;
-  } [@@deriving fields]
+module Diff = struct
+  
+  type 'a diff = {
+    src : 'a;
+    ok  : word;
+    er  : word option
+  }
 
-  let pp fmt t = 
-    let to_value = Bil.Result.value in
-    let ppv = Bil.Result.Value.pp in
-    let ppo fmt = function 
-      | Some v -> Format.fprintf fmt "%a" ppv (to_value v) 
+  type t = Imm of var diff | Mem of addr diff
+
+  let pp fmt t =
+    let ppo fmt = function
+      | Some v -> Format.fprintf fmt "%a" Word.pp v
       | None -> Format.fprintf fmt "none" in
-    Format.fprintf fmt "%a: error %a (%a)\n"
-      Var.pp t.var ppo t.er ppv (to_value t.ok)
+    let pp pp_src src ok er = 
+      Format.fprintf fmt "%a: error %a (%a)\n"
+        pp_src src ppo er Word.pp ok in 
+    match t with 
+    | Imm t -> pp Var.pp t.src t.ok t.er
+    | Mem t -> pp Addr.pp t.src t.ok t.er
 
 end
 
@@ -31,8 +36,7 @@ module type V = sig
   val right: t -> int
   val wrong: t -> int
   val until_mismatch: t -> t option
-  val diverged: t -> Diverged.t list
-  val context: t -> Bili.context * Bili.context
+  val diverged: t -> Diff.t list
 end
 
 module type A = sig
@@ -49,22 +53,87 @@ module Make(A:A)(Target:Target) : T = struct
   include A
 end
 
+module Context(Target:Target)= struct
+
+  type vars = word Var.Table.t
+  type mems = word Addr.Table.t
+
+  type t = {
+    vars : vars;
+    mems : mems;
+  }
+
+  let create () = { 
+    vars = Var.Table.create (); 
+    mems = Addr.Table.create ();
+  }
+ 
+  let to_bili_context t = 
+    let ctxt = Var.Table.fold t.vars ~init:(new Bili.context)
+        ~f:(fun ~key ~data ctxt ->
+            let ctxt,r = ctxt#create_word data in
+            ctxt#update key r) in
+    let s = Addr.Table.fold t.mems ~init:(new Bil.Storage.sparse)
+        ~f:(fun ~key ~data s -> s#save key data) in
+    let ctxt, r = ctxt#create_storage s in
+    ctxt#update Target.CPU.mem r
+
+  let update_var t var word = Var.Table.set t.vars ~key:var ~data:word
+  let update_mem t addr word = Addr.Table.set t.mems ~key:addr ~data:word
+
+  let storage_of_result v = 
+    let open Bil in
+    match Result.value v with 
+    | Mem s -> Some s
+    | _ -> None
+      
+  let word_of_result v = 
+    let open Bil in
+    match Result.value v with
+    | Imm w -> Some w
+    | _ -> None
+
+  let vars_diff t ctxt = 
+    let open Diff in
+    let add diff src ok er = (Imm {src; ok; er})::diff in
+    Var.Table.fold t.vars ~init:[] ~f:(fun ~key ~data diff ->
+        match ctxt#lookup key with
+        | None -> add diff key data None
+        | Some r -> match word_of_result r with 
+          | Some w -> 
+            if data = w then diff 
+            else add diff key data (Some w)
+          | _ -> add diff key data None) 
+      
+  let mems_diff t ctxt = 
+    let open Diff in
+    let add diff src ok er = (Mem {src; ok; er})::diff in
+    let all () = 
+      Addr.Table.fold t.mems ~init:[]
+        ~f:(fun ~key ~data diff -> add diff key data None) in
+    match ctxt#lookup Target.CPU.mem with
+    | None -> all ()
+    | Some r -> match storage_of_result r with
+      | None -> all ()
+      | Some s ->
+        Addr.Table.fold t.mems ~init:[] ~f:(fun ~key ~data diff ->
+            match s#load key with
+            | None -> add diff key data None
+            | Some w -> 
+              if w = data then diff
+              else add diff key data (Some w))
+
+  let diff t ctxt = vars_diff t ctxt @ mems_diff t ctxt
+
+end
+
 module Verification(T : T) = struct
 
-  (** type context consists of two Bili.context. First one
-      represents evaluation of events like register_write,
-      memory_store and so on, i.e. events that explicitly
-      describes some side effects. Second context represents
-      evaluation of code_exec events, after lifting them with
-      appropriative lifter for current target *)
-  type context = {
-    base : Bili.context;
-    exec : Bili.context; 
-  } 
+  module Context = Context(T)
 
   (** type compare_point describes a piece of program trace
       as raw code and list of side effects that this code
-      (in best case) perofrms. *)
+      should perofrm. *)
   type compare_point = {
     code : Chunk.t;
     side : event list;
@@ -83,16 +152,15 @@ module Verification(T : T) = struct
   type t = {
     events  : events_reader;
     result  : result;
-    context : context;
-    diverged: Diverged.t list;
+    context : Context.t;
+    diff    : Diff.t list;
   }
 
   let arch = T.arch
   let endian = Arch.endian arch
   let right {result} = result.right
   let wrong {result} = result.wrong
-  let diverged t = t.diverged
-  let context t = t.context.base, t.context.exec
+  let diverged t = t.diff
 
   let lift_insn (mem,insn) = match T.lift mem insn with
     | Ok b -> Some b
@@ -102,10 +170,9 @@ module Verification(T : T) = struct
     let events = match Seq.next (Trace.events trace) with
       | Some (ev, evs) -> Started (ev, evs)
       | None -> Finished in
-    let ctxt = new Bili.context in
-    let context = {base = ctxt; exec = ctxt;} in
+    let context = Context.create () in
     let result  = {right = 0; wrong = 0;} in
-    {events; context; result; diverged = []; }
+    {events; context; result; diff = []; }
 
   let insns_of_mem dis mem = 
     let open Or_error in
@@ -152,20 +219,7 @@ module Verification(T : T) = struct
       flush stdout;
       ctxt
 
-  let eval_code' chunk = 
-    let bili = new Bili.t in
-    match bil_of_chunk chunk with
-    | Ok bil -> bili#eval bil
-    | Error _ -> failwith "TODO: describe error"
-
-  let var_of_addr addr = 
-    let name = Bitvector.string_of_value ~hex:true addr in
-    let size = Size.of_int_exn (Bitvector.bitwidth addr) in
-    let typ  = Type.(Mem (Arch.addr_size arch, size)) in
-    Var.create name typ
-
-  (** TODO: rewrite memory_store  *)
-  let eval_event ctxt event =
+  let eval_event context event =
     let open Trace in
     let content m = Move.(cell m, data m) in
     Value.Match.(begin
@@ -174,55 +228,21 @@ module Verification(T : T) = struct
           (fun m -> 
              Printf.printf "register_write: %s\n" (string_of_event event);
              let cell,data = content m in
-             let b = Bil.(cell := int data) in
-             Stmt.eval (b::[]) ctxt) @@
+             Context.update_var context cell data) @@
         case Event.memory_store
           (fun m -> 
              Printf.printf "memory store: %s\n" (string_of_event event);
              let addr,data = content m in
-             let data = Bil.int data in
-             let b = Bil.move (var_of_addr addr) data in
-             Stmt.eval (b::[]) ctxt) @@
-        default (fun () -> ctxt)
+             Context.update_mem context addr data) @@
+        default (fun () -> ())
       end) event
-
-  (** [sync t] - replaces bindings from exec context with same 
-      variables from base context. *)
-  let sync ({context} as t) =     
-    let exec = Seq.fold ~init:context.exec
-        ~f:(fun ctxt (var,res) -> ctxt#update var res) context.base#bindings in    
-    let context = { context with exec } in 
-    { t with context }
-
-  let eval_result {base; exec} = 
-    let open Diverged in
-    let find_in_exec v = 
-      Seq.find exec#bindings ~f:(fun (v',_) -> Var.name v = Var.name v') in
-    let f (diverged, correct) (var, res) = 
-      match find_in_exec var with
-      | None -> {var; ok=res; er=None} :: diverged, correct
-      | Some (_, res') -> 
-        if Bil.Result.value res = Bil.Result.value res' then 
-          diverged, correct + 1
-        else 
-          {var; ok = res; er = Some res'} :: diverged, correct
-    in 
-    let diverged, correct = Seq.fold ~f ~init:([],0) base#bindings in
-    diverged, correct, List.length diverged
-    
-  let update_result t = 
-    let diverged, cor, incor = eval_result t.context in
-    let r = t.result in
-    let result = {right = r.right + cor; wrong = r.wrong + incor} in
-    let t' = {t with result; diverged} in
-    sync t'
-
+  
   let perform_compare t point =
-    let base = List.fold_left ~init:t.context.base ~f:eval_event point.side in
-    let exec = eval_code t.context.exec point.code in
-    let context = {base; exec} in
-    let t' = {t with context } in
-    update_result t'
+    let exec_ctxt = Context.to_bili_context t.context in
+    let exec_ctxt' = eval_code exec_ctxt point.code in
+    let () = List.iter ~f:(eval_event t.context) point.side in
+    let diff = Context.diff t.context exec_ctxt' in
+    {t with diff }
 
   let next_compare_point reader = 
     let is_code = Value.is Event.code_exec in
@@ -254,14 +274,14 @@ module Verification(T : T) = struct
     | None -> None
 
   let until_mismatch t = 
-    let r = t.result in
+    let r = t.diff in
     let rec run t =
       let p, events = next_compare_point t.events in
       let t' = {t with events} in
       match p with
       | Some p -> 
         let t' = perform_compare t' p in
-        if t'.result = r then run t'
+        if t'.diff = r then run t'
         else Some t'
       | _ -> None in
     run t
