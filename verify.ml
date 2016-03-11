@@ -63,11 +63,6 @@ module Verification(T : T) = struct
 
   let stat t = t.result
 
-  (** TODO: remove it later  *)
-  let print_name insn = 
-    let insn' = Insn.of_basic insn in
-    Printf.printf "insn: %s\n" (Insn.name insn')
-
   let insns_of_mem dis mem = 
     let open Or_error in
     let rec loop insns mem =
@@ -89,16 +84,6 @@ module Verification(T : T) = struct
           Memory.create endian (Chunk.addr chunk) mems >>=
           fun mem -> insns_of_mem dis mem)
 
-  (** TODO: remove it later  *)
-  let string_of_bil b = 
-    Format.fprintf Format.str_formatter "%a" Bil.pp b;
-    Format.flush_str_formatter ()
-
-  (** TODO: remove it later  *)
-  let string_of_event e = 
-    Format.fprintf Format.str_formatter "%a" Value.pp e;
-    Format.flush_str_formatter ()
-  
   let eval_event context event =
     let open Trace in
     let content m = Move.(cell m, data m) in
@@ -115,37 +100,16 @@ module Verification(T : T) = struct
         default (fun () -> ())
       end) event
 
-  (** TODO : remove it  *)
-  let string_of_bindings binds = 
-    let pp (v,r) =
-      let value = Bil.Result.value r in
-      let ppv = Bil.Result.Value.pp in
-      Format.fprintf Format.str_formatter "%a = %a\n" Var.pp v ppv value in
-    Seq.iter binds ~f:pp;
-    Format.flush_str_formatter ()
-
-  (** TODO : remove it  *)
-  let print_bindings binds = 
-    Printf.printf "binds: %s\n" (string_of_bindings binds)
-
-  (** [name_of_insns insns] returns a name of last
-      instruction in [insns] list *)
-  let name_of_insns insns = match (List.rev insns) with 
-    | [] -> None
-    | (_,insn)::_ -> Some Insn.(name (of_basic insn))
-
   let update_histo t = function 
-    | [] -> ()
+    | [] -> t
     | insns -> 
       let (_, insn) = List.hd_exn (List.rev insns) in
       let name = Insn.(name (of_basic insn)) in
-      Stat.succ_histo t.result name
-  
+      {t with result = Stat.succ_histo t.result name}
+
   let perform_compare t point =
     match insns_of_chunk point.code with
-    | Error _ -> 
-      let result = Stat.succ_undef t.result in
-      [], {t with result}
+    | Error _ -> [], {t with result = Stat.succ_undef t.result}
     | Ok insns -> 
       let bil = List.filter_map ~f:lift_insn insns |> List.concat in     
       let exec_ctxt = Veri_context.to_bili_context t.context in
@@ -153,9 +117,31 @@ module Verification(T : T) = struct
       let () = List.iter ~f:(eval_event t.context) point.side in
       match Veri_context.diff t.context exec_ctxt' with
       | [] -> [], t
-      | diff -> 
-        update_histo t insns;
-        diff,t
+      | diff -> diff, update_histo t insns
+
+  (** TODO: remove it  *)
+  let event_name ev =
+    let open Event in
+    Value.Match.(begin
+        select @@
+        case register_write (fun m -> "register_write") @@
+        case register_read (fun _ -> "register_read") @@
+        case memory_load (fun _ -> "memory_load") @@
+        case memory_store (fun _ -> "memory_store") @@
+        case timestamp (fun _ -> "timestamp") @@
+        case pc_update (fun _ -> "pc_update") @@
+        case context_switch (fun _ -> "context_switch") @@
+        case exn (fun _ -> "exn") @@
+        case call (fun _ -> "call") @@
+        case return (fun _ -> "return") @@
+        case modload (fun _ -> "modload") @@
+        case code_exec (fun c -> "code_exec") @@
+        default (fun () -> "unknown event")
+      end) ev 
+
+  (** TODO: remove it  *)
+  let string_of_event ev = 
+    Format.fprintf Format.std_formatter "%s: %a\n" (event_name ev) Value.pp ev
 
   let next_compare_point reader = 
     let is_code = Value.is Event.code_exec in
@@ -187,7 +173,9 @@ module Verification(T : T) = struct
     let t' = {t with events} in
     match p with
     | Some p -> 
-      let _, t' = perform_compare t' p in
+      let diff, t' = perform_compare t' p in
+      List.iter ~f:(fun d -> 
+          Format.fprintf Format.std_formatter "%a" Diff.pp d) diff;
       Some t'
     | None -> None
 
@@ -198,6 +186,7 @@ module Verification(T : T) = struct
       match p with
       | None -> [], None 
       | Some p -> 
+        List.iter ~f:string_of_event p.side;
         let diff, t' = perform_compare t' p in
         match diff with 
         | [] -> run t' 

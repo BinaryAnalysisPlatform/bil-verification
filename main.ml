@@ -58,8 +58,21 @@ let until_mismatch_n arch trace n =
     print_diverged diff;
     print_newline ()
 
+let until_mismatch_n' arch trace n =  
+  let (module V : Verify.V) = Verify.create arch in
+  let rec run cnt v =
+    if cnt = n then ()
+    else match V.until_mismatch v with 
+      | diff, Some v -> 
+        print_diverged diff;        
+        print_newline ();
+        run (cnt + 1) v
+      | diff, None -> print_diverged diff in
+  let v = V.create trace in  
+  run 0 v 
+
 let () =
   let open Result in
   match Trace.load uri with
   | Error er -> Printf.printf "error occured\n"
-  | Ok trace -> run arch trace
+  | Ok trace -> until_mismatch_n' arch trace 5

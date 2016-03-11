@@ -1,3 +1,4 @@
+open Core_kernel.Std
 open Bap.Std
 
 type vars = word Var.Table.t
@@ -15,6 +16,37 @@ let of_memory mem = {
   mem;
 }
 
+let string_of_result v =
+  let open Bil.Result in
+  Format.fprintf Format.str_formatter
+    "%a" Value.pp (Bil.Result.value v);
+  Format.flush_str_formatter ()
+
+
+let storage_of_result v = 
+  let open Bil in
+  match Result.value v with 
+  | Mem s -> Some s
+  | _ -> None
+
+(** TODO: remove it  *)
+let check {vars; mems; mem} ctxt = 
+  Var.Table.iteri ~f:(fun ~key ~data -> 
+      if ctxt#lookup key = None then
+        Printf.printf "check: no var %s\n" (Var.name key)) vars;
+  match ctxt#lookup mem with
+  | None -> Printf.printf "check: no mem!\n"
+  | Some r -> match storage_of_result r with
+    | None -> 
+      Printf.printf "check: mem is not a storage, but %s!\n"
+        (string_of_result r)
+    | Some s ->
+      Addr.Table.iteri ~f:(fun ~key ~data -> 
+          match s#load key with 
+          | None -> Format.fprintf Format.std_formatter "check: addr %a absent\n"
+                      Addr.pp key
+          | Some _ -> ()) mems
+
 let to_bili_context t = 
   let ctxt = Var.Table.fold t.vars ~init:(new Bili.context)
       ~f:(fun ~key ~data ctxt ->
@@ -23,16 +55,12 @@ let to_bili_context t =
   let s = Addr.Table.fold t.mems ~init:(new Bil.Storage.sparse)
       ~f:(fun ~key ~data s -> s#save key data) in
   let ctxt, r = ctxt#create_storage s in
-  ctxt#update t.mem r
+  let ctxt' = ctxt#update t.mem r in
+  check t ctxt';
+  ctxt'
 
 let update_var t var word = Var.Table.set t.vars ~key:var ~data:word
 let update_mem t addr word = Addr.Table.set t.mems ~key:addr ~data:word
-
-let storage_of_result v = 
-  let open Bil in
-  match Result.value v with 
-  | Mem s -> Some s
-  | _ -> None
 
 let word_of_result v = 
   let open Bil in
@@ -68,4 +96,26 @@ let mems_diff t ctxt =
             if w = data then diff
             else add diff key data (Some r))
 
-let diff t ctxt = vars_diff t ctxt @ mems_diff t ctxt
+let diff t ctxt = 
+check t ctxt;
+vars_diff t ctxt @ mems_diff t ctxt
+
+let has_diff_vars t ctxt = 
+  let exists_equal ~key ~data = match ctxt#lookup key with
+    | None -> false
+    | Some r -> match word_of_result r with 
+      | Some w -> w = data
+      | None -> false in
+  not (Var.Table.existsi t.vars ~f:exists_equal)
+    
+let has_diff_mems t ctxt = 
+  let exists_equal key data =
+    let open Option in
+    ctxt#lookup t.mem >>= storage_of_result >>= 
+    fun s -> s#load key >>= fun w -> Some (w = data) in
+  let is_diff ~key ~data = match exists_equal key data with
+    | Some r -> not r
+    | None -> true in
+  Addr.Table.existsi t.mems ~f:is_diff
+  
+let is_different t ctxt = has_diff_vars t ctxt || has_diff_mems t ctxt
