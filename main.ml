@@ -60,7 +60,11 @@ let until_mismatch_n arch trace n =
   let v = V.create trace in  
   match run 0 v with 
   | None -> Printf.printf "no result"
-  | Some v -> print_diverged (V.diverged v)
+  | Some v -> 
+    print_diverged (V.diverged v);
+    print_newline ();
+    let _, e = V.context v in
+    print_bindings e#bindings
 
 let () =
   let open Result in

@@ -38,6 +38,8 @@ module type V = sig
       result or weren't come to evaluation context at all. *)
   val diverged: t -> Diverged.t list 
 
+  val context: t -> Bili.context * Bili.context
+
 end
 
 val create: arch -> (module V)

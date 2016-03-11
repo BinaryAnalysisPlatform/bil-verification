@@ -30,8 +30,9 @@ module type V = sig
   val step : t -> t option
   val right: t -> int
   val wrong: t -> int
-  val until_mismatch: t -> t option      
+  val until_mismatch: t -> t option
   val diverged: t -> Diverged.t list
+  val context: t -> Bili.context * Bili.context
 end
 
 module type A = sig
@@ -91,6 +92,7 @@ module Verification(T : T) = struct
   let right {result} = result.right
   let wrong {result} = result.wrong
   let diverged t = t.diverged
+  let context t = t.context.base, t.context.exec
 
   let lift_insn (mem,insn) = match T.lift mem insn with
     | Ok b -> Some b
@@ -149,6 +151,12 @@ module Verification(T : T) = struct
         (Info.to_string_hum (Error.to_info er));
       flush stdout;
       ctxt
+
+  let eval_code' chunk = 
+    let bili = new Bili.t in
+    match bil_of_chunk chunk with
+    | Ok bil -> bili#eval bil
+    | Error _ -> failwith "TODO: describe error"
 
   let var_of_addr addr = 
     let name = Bitvector.string_of_value ~hex:true addr in

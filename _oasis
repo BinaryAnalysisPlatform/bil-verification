@@ -3,7 +3,7 @@ Name:        bap-types
 Version:     0.2
 Synopsis:    BAP Core Library - Basic Types
 Authors:     BAP Team
-Maintainers: Oleg Kamenkov <forown@yandex.ru>
+Maintainers: Ivan Gotovchits <ivg@ieee.org>
 License:     MIT
 Copyrights:  (C) 2014 Carnegie Mellon University
 Plugins:     META (0.4), DevFiles (0.4)
