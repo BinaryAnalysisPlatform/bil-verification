@@ -11,11 +11,11 @@ module Test_x86 = struct
 end
 
 module Test_arm = struct
-  let arch = `armv7
+  let arch = `armv5
   let uri = Uri.of_string "file:///home/oleg/factory/ls_arm.frame" 
 end
 
-open Test_x86
+open Test_arm
 
 let string_of_bindings binds = 
   let pp (v,r) =
@@ -75,4 +75,4 @@ let () =
   let open Result in
   match Trace.load uri with
   | Error er -> Printf.printf "error occured\n"
-  | Ok trace -> until_mismatch_n' arch trace 5
+  | Ok trace -> until_mismatch_n arch trace 1

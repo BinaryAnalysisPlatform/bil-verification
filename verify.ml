@@ -29,6 +29,8 @@ end
 
 module Verification(T : T) = struct
 
+  module Context = Veri_context.Make(T) 
+
   (** type compare_point describes a piece of program trace
       as raw code and list of side effects that this code
       should perform. *)
@@ -44,7 +46,7 @@ module Verification(T : T) = struct
   type t = {
     events  : events_reader;
     result  : Stat.t;
-    context : Veri_context.t;
+    context : Context.t;
   }
 
   let endian = Arch.endian T.arch
@@ -57,7 +59,7 @@ module Verification(T : T) = struct
     let events = match Seq.next (Trace.events trace) with
       | Some (ev, evs) -> Started (ev, evs)
       | None -> Finished in
-    let context = Veri_context.of_memory T.CPU.mem in
+    let context = Context.create () in
     let result  = Stat.create () in
     {events; context; result;}
 
@@ -84,19 +86,31 @@ module Verification(T : T) = struct
           Memory.create endian (Chunk.addr chunk) mems >>=
           fun mem -> insns_of_mem dis mem)
 
-  let eval_event context event =
+  let move_cell ev = Move.cell ev
+  let move_data ev = Move.data ev
+
+  let update_reg ctxt reg_event = 
+    Context.update_var ctxt (move_cell reg_event) (move_data
+    reg_event)
+
+  (** TODO: remove it *)
+  let update_reg ctxt reg_event = 
+    let var, data = Move.cell reg_event, Move.data reg_event in
+    let var' = Var.create (Var.name var) (Type.Imm 32) in
+    Context.update_var ctxt var' data
+
+  let update_mem ctxt mem_event =
+    Context.update_mem ctxt (move_cell mem_event) (move_data
+    mem_event)
+
+  let eval_event ctxt event =
     let open Trace in
-    let content m = Move.(cell m, data m) in
     Value.Match.(begin
         select @@
-        case Event.register_write 
-          (fun m -> 
-             let cell,data = content m in
-             Veri_context.update_var context cell data) @@
-        case Event.memory_store
-          (fun m -> 
-             let addr,data = content m in
-             Veri_context.update_mem context addr data) @@
+        case Event.register_write (fun m -> update_reg ctxt m) @@
+        case Event.register_read (fun m -> update_reg ctxt m) @@
+        case Event.memory_load (fun m -> update_mem ctxt m) @@
+        case Event.memory_store (fun m -> update_mem ctxt m) @@
         default (fun () -> ())
       end) event
 
@@ -105,43 +119,38 @@ module Verification(T : T) = struct
     | insns -> 
       let (_, insn) = List.hd_exn (List.rev insns) in
       let name = Insn.(name (of_basic insn)) in
+      let () = Printf.printf "insn is %s\n" name in
       {t with result = Stat.succ_histo t.result name}
+
+  let is_init_event context ev = 
+    Value.Match.(
+      select @@
+      case Event.register_read 
+        (fun m -> 
+           let var = Move.(cell m) in
+           not (Context.exists_var context var)) @@
+      case Event.memory_load 
+        (fun m -> 
+           let addr = Move.(cell m) in
+           not (Context.exists_mem context addr)) @@
+      default (fun () -> false)) ev
+    
+  let init_stage t point = 
+    let evs = List.filter ~f:(is_init_event t.context) point.side in
+    List.iter evs ~f:(eval_event t.context)       
 
   let perform_compare t point =
     match insns_of_chunk point.code with
     | Error _ -> [], {t with result = Stat.succ_undef t.result}
     | Ok insns -> 
-      let bil = List.filter_map ~f:lift_insn insns |> List.concat in     
-      let exec_ctxt = Veri_context.to_bili_context t.context in
+      let bil = List.filter_map ~f:lift_insn insns |> List.concat in
+      let () = init_stage t point in
+      let exec_ctxt = Context.to_bili_context t.context in
       let exec_ctxt' = Stmt.eval bil exec_ctxt in
       let () = List.iter ~f:(eval_event t.context) point.side in
-      match Veri_context.diff t.context exec_ctxt' with
+      match Context.diff t.context exec_ctxt' with
       | [] -> [], t
       | diff -> diff, update_histo t insns
-
-  (** TODO: remove it  *)
-  let event_name ev =
-    let open Event in
-    Value.Match.(begin
-        select @@
-        case register_write (fun m -> "register_write") @@
-        case register_read (fun _ -> "register_read") @@
-        case memory_load (fun _ -> "memory_load") @@
-        case memory_store (fun _ -> "memory_store") @@
-        case timestamp (fun _ -> "timestamp") @@
-        case pc_update (fun _ -> "pc_update") @@
-        case context_switch (fun _ -> "context_switch") @@
-        case exn (fun _ -> "exn") @@
-        case call (fun _ -> "call") @@
-        case return (fun _ -> "return") @@
-        case modload (fun _ -> "modload") @@
-        case code_exec (fun c -> "code_exec") @@
-        default (fun () -> "unknown event")
-      end) ev 
-
-  (** TODO: remove it  *)
-  let string_of_event ev = 
-    Format.fprintf Format.std_formatter "%s: %a\n" (event_name ev) Value.pp ev
 
   let next_compare_point reader = 
     let is_code = Value.is Event.code_exec in
@@ -174,8 +183,6 @@ module Verification(T : T) = struct
     match p with
     | Some p -> 
       let diff, t' = perform_compare t' p in
-      List.iter ~f:(fun d -> 
-          Format.fprintf Format.std_formatter "%a" Diff.pp d) diff;
       Some t'
     | None -> None
 
@@ -186,7 +193,6 @@ module Verification(T : T) = struct
       match p with
       | None -> [], None 
       | Some p -> 
-        List.iter ~f:string_of_event p.side;
         let diff, t' = perform_compare t' p in
         match diff with 
         | [] -> run t' 
