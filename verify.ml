@@ -13,21 +13,7 @@ module type V = sig
   val stat: t -> Stat.t
 end
 
-module type A = sig
-  val arch: arch
-end
-
-module type T = sig
-  include Target
-  include A
-end
-
-module Make(A:A)(Target:Target) : T = struct
-  include Target
-  include A
-end
-
-module Verification(T : T) = struct
+module Verification(T : Veri_types.T) = struct
 
   module Context = Veri_context.Make(T) 
 
@@ -209,7 +195,5 @@ module Verification(T : T) = struct
 end
 
 let create arch = 
-  let module Target = (val target_of_arch arch) in
-  let module A = struct let arch = arch end in
-  let module T = Make(A)(Target) in  
+  let module T = (val (Veri_types.t_of_arch arch)) in
   (module Verification(T) : V)
