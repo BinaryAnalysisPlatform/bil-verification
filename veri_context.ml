@@ -13,6 +13,7 @@ module type T = sig
   val exists_mem : t -> addr -> bool
   val diff : t -> Bili.context -> Diff.t list
   val is_different: t -> Bili.context -> bool
+  val pp: Format.formatter -> t -> unit
 end
 
 module Make (Types : Veri_types.T) : T = struct
@@ -20,11 +21,19 @@ module Make (Types : Veri_types.T) : T = struct
 
   type vars = word Var.Table.t
   type mems = word Addr.Table.t
-    
+
   type t = {
     vars : vars;
     mems : mems;
   }
+
+  let pp fmt {vars; mems} = 
+    let ppv (var, word) = 
+      Format.fprintf fmt "%a %a\n" Var.pp var Word.pp word in
+    let ppm (addr, word) = 
+      Format.fprintf fmt "%a %a\n" Word.pp addr Word.pp word in
+    List.iter ~f:ppv (Var.Table.to_alist vars);
+    List.iter ~f:ppm (Addr.Table.to_alist mems)
 
   let update_var t var word = Var.Table.set t.vars ~key:var ~data:word
   let update_mem t addr word = Addr.Table.set t.mems ~key:addr ~data:word
@@ -48,7 +57,7 @@ module Make (Types : Veri_types.T) : T = struct
     let t = {vars; mems;} in
     init t;
     t
-  
+
   let endian = Arch.endian arch
 
   let storage_of_result v = 
@@ -104,7 +113,7 @@ module Make (Types : Veri_types.T) : T = struct
         | None -> add diff key data None
         | Some r -> match word_of_result r with 
           | Some w -> 
-            if data = w then diff 
+            if Bitvector.equal data w then diff 
             else add diff key data (Some r)
           | None -> add diff key data (Some r)) 
 
@@ -123,31 +132,40 @@ module Make (Types : Veri_types.T) : T = struct
             match load s key w with
             | None -> add diff key data None
             | Some w -> 
-              if w = data then diff
+              if Bitvector.equal w data then diff
               else add diff key data (Some r))
 
-  let diff t ctxt = 
-    vars_diff t ctxt @ mems_diff t ctxt
+  let diff t ctxt = vars_diff t ctxt @ mems_diff t ctxt
 
   let has_diff_vars t ctxt = 
-    let exists_equal ~key ~data = match ctxt#lookup key with
+    let exists_equal key data = match ctxt#lookup key with
       | None -> false
       | Some r -> match word_of_result r with 
-        | Some w -> w = data
+        | Some w -> Bitvector.equal w data
         | None -> false in
-    not (Var.Table.existsi t.vars ~f:exists_equal)
+    let is_diff ~key ~data = not (exists_equal key data) in    
+    Var.Table.existsi t.vars ~f:is_diff
 
   let has_diff_mems t ctxt = 
     let exists_equal key data =
       let open Option in
       ctxt#lookup CPU.mem >>= storage_of_result >>= 
-      fun s -> s#load key >>= fun w -> Some (w = data) in
+      fun s -> load s key (Bitvector.bitwidth data) >>= 
+      fun w -> Some (Bitvector.equal w data) in
     let is_diff ~key ~data = match exists_equal key data with
       | Some r -> not r
       | None -> true in
     Addr.Table.existsi t.mems ~f:is_diff
 
-  let is_different t ctxt = has_diff_vars t ctxt || has_diff_mems t ctxt
+  (** TODO: remove it  *)
+  let print_binds ctxt = 
+    let pp (var,res) =
+      Format.fprintf Format.std_formatter "%a %a\n"
+        Var.pp var Bil.Result.Value.pp (Bil.Result.value res) in
+    Seq.iter ~f:pp ctxt#bindings
+
+  let is_different t ctxt = 
+    has_diff_vars t ctxt || has_diff_mems t ctxt
 
   let exists_var t var = Var.Table.mem t.vars var
   let exists_mem t addr = Addr.Table.mem t.mems addr

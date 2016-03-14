@@ -21,22 +21,20 @@ module Diff : sig
 end
 
 module Record : sig
-
-  type t = {
-    code : Chunk.t;
-    ctxt : Bili.context;
-    diff : Diff.t list;
-  } 
+  type t 
   val create: Chunk.t -> Bili.context -> Diff.t list -> t
+  val code: t -> Chunk.t
+  val ctxt: t -> Bili.context
+  val diff: t -> Diff.t list
 end
 
 type t
 
-val empty: t
+val create: unit -> t
 
-(** [add t insn_name record] - adds an corrupted instruction
+(** [succ_wrong t insn_name record] - adds an corrupted instruction
     description *)
-val add: t -> string -> Record.t -> t
+val succ_wrong: t -> string -> Record.t option -> unit
 
 (** [succ_right t] - increments a counter of correctly lifted and
     compared instructions *)
@@ -54,5 +52,7 @@ val undef: t -> int
 (** [histo t] - return a list of instruction names coupled with number of 
     theirs problem cases *)
 val histo: t -> (string * int) list
+
+val find: t -> string -> Record.t option list
 
 val pp: Format.formatter -> t -> unit

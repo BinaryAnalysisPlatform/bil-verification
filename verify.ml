@@ -10,8 +10,9 @@ module Diff = Report.Diff
 module type V = sig
   type t
   val create : Trace.t -> t
+  val until_mismatch: t -> t option
   val execute: Trace.t -> t
-  val until_mismatch: t -> Diff.t list * t option
+  val find: Trace.t -> string -> Report.Record.t option
   val report: t -> Report.t
 end
 
@@ -48,7 +49,7 @@ module Verification(T : Veri_types.T) = struct
       | Some (ev, evs) -> Started (ev, evs)
       | None -> Finished in
     let context = Context.create () in
-    let report  = Report.empty in
+    let report  = Report.create () in
     {events; context; report;}
 
   let report t = t.report
@@ -82,10 +83,10 @@ module Verification(T : Veri_types.T) = struct
     reg_event)
 
   (** TODO: remove it *)
-  let update_reg ctxt reg_event = 
-    let var, data = Move.cell reg_event, Move.data reg_event in
-    let var' = Var.create (Var.name var) (Type.Imm 32) in
-    Context.update_var ctxt var' data
+  (* let update_reg ctxt reg_event = *)
+  (*   let var, data = Move.cell reg_event, Move.data reg_event in *)
+  (*   let var' = Var.create (Var.name var) (Type.Imm 32) in *)
+  (*   Context.update_var ctxt var' data *)
 
   let update_mem ctxt mem_event =
     Context.update_mem ctxt (move_cell mem_event) (move_data
@@ -103,11 +104,11 @@ module Verification(T : Veri_types.T) = struct
       end) event
 
   let update_histo t record = function 
-    | [] -> t
+    | [] -> ()
     | insns -> 
-      let (_, insn) = List.hd_exn (List.rev insns) in
+      let (_, insn) = List.hd_exn (List.rev insns) in      
       let name = Insn.(name (of_basic insn)) in
-      {t with report = Report.add t.report name record; }
+      Report.succ_wrong t.report name record
 
   let is_init_event context ev = 
     Value.Match.(
@@ -124,22 +125,26 @@ module Verification(T : Veri_types.T) = struct
     
   let init_stage t point = 
     let evs = List.filter ~f:(is_init_event t.context) point.side in
-    List.iter evs ~f:(eval_event t.context)       
+    List.iter evs ~f:(eval_event t.context)
 
-  let perform_compare t point =
+  let perform_compare t ~verbose point =
     match insns_of_chunk point.code with
-    | Error _ -> [], {t with report = Report.succ_undef t.report}
+    | Error _ -> {t with report = Report.succ_undef t.report}
     | Ok insns -> 
       let bil = List.filter_map ~f:lift_insn insns |> List.concat in
       let () = init_stage t point in
       let exec_ctxt = Context.to_bili_context t.context in
       let exec_ctxt' = Stmt.eval bil exec_ctxt in
       let () = List.iter ~f:(eval_event t.context) point.side in
-      match Context.diff t.context exec_ctxt' with
-      | [] -> [], t
-      | diff -> 
-        let record = Report.Record.create point.code exec_ctxt diff in 
-        diff, update_histo t record insns 
+      if Context.is_different t.context exec_ctxt' then       
+        let record =
+          if verbose then
+            let diff = Context.diff t.context exec_ctxt' in
+            Some (Report.Record.create point.code exec_ctxt diff)
+          else None in
+        update_histo t record insns;
+        t
+      else {t with report = Report.succ_right t.report}
 
   let next_compare_point reader = 
     let is_code = Value.is Event.code_exec in
@@ -170,22 +175,20 @@ module Verification(T : Veri_types.T) = struct
     let p,events = next_compare_point t.events in
     let t' = {t with events} in
     match p with
-    | Some p -> 
-      let diff, t' = perform_compare t' p in
-      Some t'
+    | Some p -> Some (perform_compare t' ~verbose:false p) 
     | None -> None
 
   let until_mismatch t = 
+    let start = Report.wrong t.report in
     let rec run t =
       let p, events = next_compare_point t.events in
       let t' = {t with events} in
       match p with
-      | None -> [], None 
+      | None -> None 
       | Some p -> 
-        let diff, t' = perform_compare t' p in
-        match diff with 
-        | [] -> run t' 
-        | diff -> diff, Some t' in
+        let t' = perform_compare t' ~verbose:true p  in
+        if start <> Report.wrong t'.report then Some t'
+        else run t' in
     run t
 
   let execute trace = 
@@ -194,6 +197,20 @@ module Verification(T : Veri_types.T) = struct
       | None -> t
       | Some t' -> run t' in
     run t 
+
+  let find trace insn_name = 
+    let t = create trace in
+    let rec run t =
+      let p, events = next_compare_point t.events in
+      let t' = {t with events} in
+      match p with
+      | None -> None
+      | Some p -> 
+        let t' = perform_compare t' ~verbose:true p in
+        match Report.find t'.report insn_name with
+        | [] -> run t'
+        | r::_ -> r in
+    run t
 
 end
 

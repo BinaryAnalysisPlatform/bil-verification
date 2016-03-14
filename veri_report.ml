@@ -21,7 +21,7 @@ module Diff = struct
       | Some r -> Format.fprintf fmt "%a" Value.pp (value r)
       | None -> Format.fprintf fmt "none!" in
     let pp pp_src src ok er = 
-      Format.fprintf fmt "%a: error %a (%a)\n"
+      Format.fprintf fmt "%a: %a (expected: %a)\n"
         pp_src src ppo er Word.pp ok in 
     match t with 
     | Imm t -> pp Var.pp t.src t.ok t.er
@@ -35,50 +35,60 @@ module Record = struct
     code : Chunk.t;
     ctxt : Bili.context;
     diff : Diff.t list;
-  }
+  } [@@deriving fields]
   
   let create code ctxt diff = {code; ctxt; diff}
-
 end
 
 type record = Record.t
 
-module Map = String.Map
+module Tab = String.Table
 
 type t = {
-  wrong : (record list) Map.t;
+  wrong : (record option list) Tab.t;
   right : int;
-  undef : int;
+  undef : int;  
 }
 
-let empty = {
-  wrong = Map.empty;
+let create () = {
+  wrong = Tab.create ();
   right = 0;
   undef = 0;
 }
 
-let add t insn_name record = 
-  let wrong = Map.change t.wrong insn_name
-      ~f:(function 
-          | None -> Some [record]
-          | Some rcs -> Some (record::rcs)) in
-  {t with wrong } 
+let succ_wrong t insn_name record =
+  Tab.change t.wrong insn_name
+    ~f:(function 
+        | None -> Some [record]
+        | Some rcs -> Some (record::rcs))
 
 let succ_right t = {t with right = Int.succ t.right}
 let succ_undef t = {t with undef = Int.succ t.undef}
 
 let records t =
-  Map.fold t.wrong ~init:[] 
+  Tab.fold t.wrong ~init:[] 
     ~f:(fun ~key ~data acc ->
-        let recs = List.map ~f:(fun r -> key,r) data in
+        let recs = List.filter_map 
+            ~f:(fun r -> match r with
+                | None -> None
+                | Some r -> Some (key,r)) data in
         acc @ recs)
 
 let right t = t.right
-let wrong t = Map.length t.wrong
+let wrong t = 
+  Tab.fold t.wrong ~init:0
+    ~f:(fun ~key ~data acc -> acc + List.length data)
+
 let undef t = t.undef
+
 let histo t = 
-  Map.fold t.wrong ~init:[]
+  Tab.fold t.wrong ~init:[]
     ~f:(fun ~key ~data acc -> (key, List.length data) :: acc)
+
+let find t insn_name = 
+  match Tab.find t.wrong insn_name with
+  | None -> []
+  | Some rcs -> rcs
 
 let pp fmt t = 
   let ppr fmt (name, times) = 

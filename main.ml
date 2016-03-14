@@ -17,34 +17,35 @@ end
 
 open Test_arm
 
-let string_of_bindings binds = 
-  let pp (v,r) =
-    let value = Bil.Result.value r in
-    let ppv = Bil.Result.Value.pp in
-    Format.fprintf Format.str_formatter "%a = %a\n" Var.pp v ppv value in
-  Seq.iter binds ~f:pp;
-  Format.flush_str_formatter ()
+let print_diverged difs = 
+  Format.fprintf Format.std_formatter "diffs: \n";
+  List.iter ~f:(Veri_report.Diff.pp Format.std_formatter) difs;
+  Format.fprintf Format.std_formatter "---- \n"
 
-let print_bindings binds = 
-  Printf.printf "%s\n" (string_of_bindings binds)
-
-let print_diverged = 
-  List.iter ~f:(Veri_report.Diff.pp Format.std_formatter) 
+let diff_of_records =
+  List.fold ~init:[] ~f:(fun acc (_,r) ->
+      acc @ Veri_report.Record.(diff r))
 
 let until_mismatch arch trace =
   let (module V : Verify.V) = Verify.create arch in
   let v = V.create trace in
   match V.until_mismatch v with 
-  | [],_ -> Printf.printf "no result"
-  | diff,_ -> print_diverged diff
+  | Some v -> 
+    let recs = Veri_report.records (V.report v) in
+    let diff = diff_of_records recs in
+    print_diverged diff
+  | None -> ()
 
 let until_mismatch_n arch trace n =  
   let (module V : Verify.V) = Verify.create arch in
   let rec run last_diff cnt v =
     if cnt = n then last_diff
     else match V.until_mismatch v with 
-      | diff, Some v -> run diff (cnt + 1) v
-      | diff, None -> diff in
+      | Some v -> 
+        let recs = Veri_report.records (V.report v) in
+        let diff = diff_of_records (recs) in
+        run diff (cnt + 1) v
+      | None -> [] in
   let v = V.create trace in  
   match run [] 0 v with 
   | [] -> Printf.printf "no result"
@@ -57,16 +58,29 @@ let until_mismatch_n' arch trace n =
   let rec run cnt v =
     if cnt = n then ()
     else match V.until_mismatch v with 
-      | diff, Some v -> 
+      | Some v -> 
+        let recs = Veri_report.records (V.report v) in
+        let diff = diff_of_records (recs) in
         print_diverged diff;        
         print_newline ();
         run (cnt + 1) v
-      | diff, None -> print_diverged diff in
+      | None -> Printf.printf "no result\n" in
   let v = V.create trace in  
   run 0 v 
 
+let run arch trace = 
+  let (module V : Verify.V) = Verify.create arch in
+  let v = V.execute trace in
+  let report = V.report v in
+  Veri_report.pp Format.std_formatter report
+
+(** TODO: add a cmdline control here:
+    - add find - to find first entry of corrupted instruction
+    - add mode - either to show statistic either to show first mismatch *)
 let () =
   let open Result in
   match Trace.load uri with
   | Error er -> Printf.printf "error occured\n"
-  | Ok trace -> until_mismatch_n arch trace 1
+  | Ok trace -> 
+    until_mismatch_n' arch trace 1
+    (* run arch trace *)

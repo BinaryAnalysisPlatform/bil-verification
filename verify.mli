@@ -9,11 +9,15 @@ module type V = sig
   (** [create trace] - returns a fresh t type *)
   val create: Trace.t -> t
 
+  (** [until_mismatch t] execute trace until first mismatch *)
+  val until_mismatch: t -> t option
+
   (** [execute trace] - executes whole trace *)
   val execute: Trace.t -> t  
 
-  (** [until_mismatch t] execute trace until first mismatch *)
-  val until_mismatch: t -> Diff.t list * t option
+  (** [find trace insn_name] - execute whole trace
+      until first mis-matching instruction [insn_name] *)
+  val find: Trace.t -> string -> Record.t option
 
   val report: t -> Veri_report.t
 
