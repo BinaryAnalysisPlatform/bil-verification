@@ -76,7 +76,8 @@ let run arch trace =
 
 (** TODO: add a cmdline control here:
     - add find - to find first entry of corrupted instruction
-    - add mode - either to show statistic either to show first mismatch *)
+    - add mode - either to show statistic either to show first mismatch 
+    - output (sexp &&/|| bin_io) *)
 let () =
   let open Result in
   match Trace.load uri with

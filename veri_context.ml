@@ -116,7 +116,7 @@ module Make (Types : Veri_types.T) : T = struct
             if Bitvector.equal data w then diff 
             else add diff key data (Some r)
           | None -> add diff key data (Some r)) 
-
+ 
   let mems_diff t ctxt = 
     let add diff src ok er = Diff.of_mem src ok er :: diff in
     let all () = 
@@ -156,13 +156,6 @@ module Make (Types : Veri_types.T) : T = struct
       | Some r -> not r
       | None -> true in
     Addr.Table.existsi t.mems ~f:is_diff
-
-  (** TODO: remove it  *)
-  let print_binds ctxt = 
-    let pp (var,res) =
-      Format.fprintf Format.std_formatter "%a %a\n"
-        Var.pp var Bil.Result.Value.pp (Bil.Result.value res) in
-    Seq.iter ~f:pp ctxt#bindings
 
   let is_different t ctxt = 
     has_diff_vars t ctxt || has_diff_mems t ctxt

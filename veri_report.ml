@@ -8,7 +8,7 @@ module Diff = struct
     src : 'a;
     ok  : word;
     er  : Bil.result option
-  }
+  } 
 
   type t = Imm of var diff | Mem of addr diff
 
@@ -48,7 +48,7 @@ type t = {
   wrong : (record option list) Tab.t;
   right : int;
   undef : int;  
-}
+} 
 
 let create () = {
   wrong = Tab.create ();
