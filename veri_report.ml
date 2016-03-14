@@ -19,7 +19,7 @@ module Diff = struct
     let open Bil.Result in
     let ppo fmt = function
       | Some r -> Format.fprintf fmt "%a" Value.pp (value r)
-      | None -> Format.fprintf fmt "none!" in
+      | None -> Format.fprintf fmt "none" in
     let pp pp_src src ok er = 
       Format.fprintf fmt "%a: %a (expected: %a)\n"
         pp_src src ppo er Word.pp ok in 

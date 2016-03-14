@@ -82,12 +82,6 @@ module Verification(T : Veri_types.T) = struct
     Context.update_var ctxt (move_cell reg_event) (move_data
     reg_event)
 
-  (** TODO: remove it *)
-  (* let update_reg ctxt reg_event = *)
-  (*   let var, data = Move.cell reg_event, Move.data reg_event in *)
-  (*   let var' = Var.create (Var.name var) (Type.Imm 32) in *)
-  (*   Context.update_var ctxt var' data *)
-
   let update_mem ctxt mem_event =
     Context.update_mem ctxt (move_cell mem_event) (move_data
     mem_event)
