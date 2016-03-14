@@ -2,6 +2,7 @@ B _build
 S .
 
 PKG core_kernel
+PKG cmdliner
 PKG bap
 PKG bap-traces
 PKG bap-piqi-traces

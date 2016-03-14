@@ -31,4 +31,4 @@ Executable "main"
   MainIs:         main.ml
   Install:        false
   CompiledObject: best
-  BuildDepends:   veri
+  BuildDepends:   veri, cmdliner

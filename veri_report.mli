@@ -15,44 +15,48 @@ module Diff : sig
 
   val of_var: var -> word -> Bil.result option -> t 
   val of_mem: addr -> word -> Bil.result option -> t 
-
   val pp: Format.formatter -> t -> unit
-
 end
+
+type diff = Diff.t
 
 module Record : sig
   type t 
-  val create: Chunk.t -> Bili.context -> Diff.t list -> t
+  val create: Chunk.t -> Bili.context -> diff list -> t
   val code: t -> Chunk.t
   val ctxt: t -> Bili.context
-  val diff: t -> Diff.t list
+  val diff: t -> diff list
 end
 
-type t
+type record = Record.t
 
-val create: unit -> t
+module type Common = sig
+  type t 
+  val create: unit -> t
+  val histo: t -> (string * int) list
+  val right: t -> int
+  val wrong: t -> int
+  val undef: t -> int
+  val succ_right: t -> t
+  val succ_undef: t -> t
+  val pp: Format.formatter -> t -> unit
+end
 
-(** [succ_wrong t insn_name record] - adds an corrupted instruction
-    description *)
-val succ_wrong: t -> string -> Record.t option -> unit
+module Light : sig
+  type t [@@deriving bin_io, sexp] 
+  include Common with type t := t
+  val succ_wrong: t -> string -> unit
+end
 
-(** [succ_right t] - increments a counter of correctly lifted and
-    compared instructions *)
-val succ_right: t -> t
+module Debug : sig
+  include Common
+  val succ_wrong: t -> string -> record -> unit
+  val find: t -> string -> record list
+  val records: t -> (string * record) list
+end
 
-(** [succ_right t] - increments a counter of times when instruction lifting
-    was failed, i.e. it wasn't even any BIL code to analize. *)
-val succ_undef: t -> t 
+type light = Light.t [@@deriving bin_io, sexp] 
+type debug = Debug.t
 
-val records: t -> (string * Record.t) list
-val right: t -> int
-val wrong: t -> int
-val undef: t -> int
-
-(** [histo t] - return a list of instruction names coupled with number of 
-    theirs problem cases *)
-val histo: t -> (string * int) list
-
-val find: t -> string -> Record.t option list
-
-val pp: Format.formatter -> t -> unit
+val create_light: unit -> light
+val create_debug: unit -> debug
