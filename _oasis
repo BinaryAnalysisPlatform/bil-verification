@@ -23,7 +23,7 @@ Library "veri"
   Path: .
   FindLibName: veri
   BuildTools: ocamlbuild
-  Modules: Verify, Diff, Stat, Veri_context, Veri_types
+  Modules: Verify, Veri_context, Veri_types, Veri_report
   CompiledObject: best
 
 Executable "main"

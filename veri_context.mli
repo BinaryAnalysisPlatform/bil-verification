@@ -1,5 +1,7 @@
 open Bap.Std
 
+open Veri_report
+
 module type T = sig
 
   type t

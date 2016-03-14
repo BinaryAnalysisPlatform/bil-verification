@@ -1,5 +1,6 @@
 open Bap.Std
 open Bap_traces.Std
+open Veri_report
 
 module type V = sig
 
@@ -14,7 +15,7 @@ module type V = sig
   (** [until_mismatch t] execute trace until first mismatch *)
   val until_mismatch: t -> Diff.t list * t option
 
-  val stat: t -> Stat.t
+  val report: t -> Veri_report.t
 
 end
 

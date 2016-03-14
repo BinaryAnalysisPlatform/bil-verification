@@ -4,13 +4,15 @@ open Bap_traces.Std
 open Trace
 
 module Dis = Disasm_expert.Basic
+module Report = Veri_report
+module Diff = Report.Diff
 
 module type V = sig
   type t
   val create : Trace.t -> t
   val execute: Trace.t -> t
   val until_mismatch: t -> Diff.t list * t option
-  val stat: t -> Stat.t
+  val report: t -> Report.t
 end
 
 module Verification(T : Veri_types.T) = struct
@@ -31,7 +33,7 @@ module Verification(T : Veri_types.T) = struct
 
   type t = {
     events  : events_reader;
-    result  : Stat.t;
+    report  : Report.t;
     context : Context.t;
   }
 
@@ -46,10 +48,10 @@ module Verification(T : Veri_types.T) = struct
       | Some (ev, evs) -> Started (ev, evs)
       | None -> Finished in
     let context = Context.create () in
-    let result  = Stat.create () in
-    {events; context; result;}
+    let report  = Report.empty in
+    {events; context; report;}
 
-  let stat t = t.result
+  let report t = t.report
 
   let insns_of_mem dis mem = 
     let open Or_error in
@@ -100,13 +102,12 @@ module Verification(T : Veri_types.T) = struct
         default (fun () -> ())
       end) event
 
-  let update_histo t = function 
+  let update_histo t record = function 
     | [] -> t
     | insns -> 
       let (_, insn) = List.hd_exn (List.rev insns) in
       let name = Insn.(name (of_basic insn)) in
-      let () = Printf.printf "insn is %s\n" name in
-      {t with result = Stat.succ_histo t.result name}
+      {t with report = Report.add t.report name record; }
 
   let is_init_event context ev = 
     Value.Match.(
@@ -127,7 +128,7 @@ module Verification(T : Veri_types.T) = struct
 
   let perform_compare t point =
     match insns_of_chunk point.code with
-    | Error _ -> [], {t with result = Stat.succ_undef t.result}
+    | Error _ -> [], {t with report = Report.succ_undef t.report}
     | Ok insns -> 
       let bil = List.filter_map ~f:lift_insn insns |> List.concat in
       let () = init_stage t point in
@@ -136,7 +137,9 @@ module Verification(T : Veri_types.T) = struct
       let () = List.iter ~f:(eval_event t.context) point.side in
       match Context.diff t.context exec_ctxt' with
       | [] -> [], t
-      | diff -> diff, update_histo t insns
+      | diff -> 
+        let record = Report.Record.create point.code exec_ctxt diff in 
+        diff, update_histo t record insns 
 
   let next_compare_point reader = 
     let is_code = Value.is Event.code_exec in

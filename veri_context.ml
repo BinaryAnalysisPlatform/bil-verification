@@ -1,6 +1,8 @@
 open Core_kernel.Std
 open Bap.Std
 
+module Diff = Veri_report.Diff
+
 module type T = sig
   type t
   val create: unit -> t

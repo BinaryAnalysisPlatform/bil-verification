@@ -28,14 +28,8 @@ let string_of_bindings binds =
 let print_bindings binds = 
   Printf.printf "%s\n" (string_of_bindings binds)
 
-let run arch trace = 
-  let (module V : Verify.V) = Verify.create arch in
-  let v = V.execute trace in
-  let h = Stat.histo (V.stat v) in
-  List.iter ~f:(fun (name, times) -> Printf.printf "%s %d\n" name times) h
-
 let print_diverged = 
-  List.iter ~f:(Diff.pp Format.std_formatter) 
+  List.iter ~f:(Veri_report.Diff.pp Format.std_formatter) 
 
 let until_mismatch arch trace =
   let (module V : Verify.V) = Verify.create arch in
