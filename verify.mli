@@ -14,7 +14,7 @@ module type V = sig
   val execute: Trace.t -> t  
 
   (** [report t] - returns a report of trace execution. *)
-  val report: t -> Veri_report.light
+  val report: t -> Veri_report.brief
 
 end
 

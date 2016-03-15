@@ -1,90 +1,65 @@
 open Core_kernel.Std
 open Cmdliner
-open Bap.Std
-open Bap_traces.Std
-open Bap_plugins.Std
 
-let () = Frame_trace_plugin.register ()
+module Run = struct
+  open Bap.Std
+  open Bap_traces.Std
+  open Bap_plugins.Std
 
-module Test_x86 = struct
-  let arch = `x86
-  let uri = Uri.of_string "file:///home/oleg/factory/ls32.frame" 
+  let () = Frame_trace_plugin.register ()
+
+  let run arch file  =
+    match Arch.of_string arch with
+    | None -> Printf.eprintf "unsupported arch %s\n" arch
+    | Some arch ->
+      let uri = Uri.of_string ("file://" ^ file) in
+      match Trace.load uri with
+      | Error er -> Printf.printf "error during load trace\n"
+      | Ok trace ->
+        let (module V : Verify.V) = Verify.create arch in
+        let v = V.execute trace in
+        let report = V.report v in
+        Veri_report.Brief.pp Format.std_formatter report
+
 end
 
-module Test_arm = struct
-  let arch = `armv5
-  let uri = Uri.of_string "file:///home/oleg/factory/ls_arm.frame" 
-end
+let arch =
+  let doc = "Target architecture" in
+  Arg.(required & pos 0 (some string) None & info [] ~docv:"ARCH" ~doc)
 
-open Test_arm
+let filename =
+  let doc = "Input filename" in
+  Arg.(required & pos 1 (some non_dir_file) None & info [] ~doc ~docv:"FILE")
 
-let print_diverged difs = 
-  Format.fprintf Format.std_formatter "diffs: \n";
-  List.iter ~f:(Veri_report.Diff.pp Format.std_formatter) difs;
-  Format.fprintf Format.std_formatter "---- \n"
+let proto =
+  let doc = "Protocol for output" in
+  Arg.(value & opt string "sexp" & info ["p"; "proto"] ~docv:"PROTOCOL" ~doc)
 
-let diff_of_records =
-  List.fold ~init:[] ~f:(fun acc (_,r) ->
-      acc @ Veri_report.Record.(diff r))
+let output =
+  let doc = "Output filemname" in
+  Arg.(value & opt (some string) None & info ["o"; "output"] ~docv:"OUTPUT" ~doc)
 
-let until_mismatch arch trace =
-  let (module V : Verify.D) = Verify.create_debug arch in
-  let v = V.create trace in
-  match V.until_mismatch v with 
-  | Some v -> 
-    let recs = Veri_report.Debug.records (V.report v) in
-    let diff = diff_of_records recs in
-    print_diverged diff
-  | None -> ()
+let run_t = Term.(const Run.run $ arch $ filename)
 
-let until_mismatch_n arch trace n =  
-  let (module V : Verify.D) = Verify.create_debug arch in
-  let rec run last_diff cnt v =
-    if cnt = n then last_diff
-    else match V.until_mismatch v with 
-      | Some v -> 
-        let recs = Veri_report.Debug.records (V.report v) in
-        let diff = diff_of_records (recs) in
-        run diff (cnt + 1) v
-      | None -> [] in
-  let v = V.create trace in  
-  match run [] 0 v with 
-  | [] -> Printf.printf "no result"
-  | diff -> 
-    print_diverged diff;
-    print_newline ()
+let info =
+  let doc = "Bil verification tool" in
+  let man = [
+    `S "SYNOPSIS";
+    `S "DESCRIPTION";
+    `P "Perform compare"
+] in
+  Term.info "veri" ~doc ~man
 
-let until_mismatch_n' arch trace n =  
-  let (module V : Verify.D) = Verify.create_debug arch in
-  let rec run cnt v =
-    if cnt = n then ()
-    else match V.until_mismatch v with 
-      | Some v -> 
-        let recs = Veri_report.Debug.records (V.report v) in
-        let diff = diff_of_records (recs) in
-        print_diverged diff;        
-        print_newline ();
-        run (cnt + 1) v
-      | None -> Printf.printf "no result\n" in
-  let v = V.create trace in  
-  run 0 v 
-
-let run arch trace = 
-  let (module V : Verify.V) = Verify.create arch in
-  let v = V.execute trace in
-  let report = V.report v in
-  Veri_report.Light.pp Format.std_formatter report
-
-let () =
-  let open Result in
-  match Trace.load uri with
-  | Error er -> Printf.printf "error occured\n"
-  | Ok trace -> 
-    (* until_mismatch_n' arch trace 1 *)
-    run arch trace
+let () = match Term.eval (run_t, info) with `Error _ -> exit 1 | _ -> exit 0
 
 (** TODO: add a cmdline control here:
-    - add find - to find first entry of corrupted instruction
-    - add mode - either to show statistic either to show first mismatch 
-    - output (sexp &&/|| bin_io) *)
+
+    usage:
+    - ./veri arch filename
+    - ./veri arch -p [proto] -o file.out filename
+    - ./veri_debug until arch filename
+    - ./veri_debug --find [insn_all] arch filename
+    - ./veri_debug --find-all [insn_all] arch filename
+    
+*)
 

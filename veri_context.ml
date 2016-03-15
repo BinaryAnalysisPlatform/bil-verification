@@ -100,40 +100,52 @@ module Make (Types : Veri_types.T) : T = struct
     let ctxt, r = ctxt#create_storage s in
     ctxt#update CPU.mem r
 
+  let is_mem = function 
+    | Bil.Mem _ -> true
+    | _ -> false
+
+  let is_imm = function 
+    | Bil.Imm _ -> true
+    | _ -> false
+
   let word_of_result v = 
     let open Bil in
     match Result.value v with
     | Imm w -> Some w
     | _ -> None
 
+  let diff_imm var ok er = Diff.(Imm (var, {ok; er})) 
+  let diff_mem addr ok er = Diff.(Mem (addr, {ok; er})) 
   let vars_diff t ctxt = 
-    let add diff src ok er = Diff.of_var src ok er :: diff in
-    Var.Table.fold t.vars ~init:[] ~f:(fun ~key ~data diff ->
+    Var.Table.fold t.vars ~init:[] ~f:(fun ~key ~data diffs ->
         match ctxt#lookup key with
-        | None -> add diff key data None
+        | None -> diff_imm key data Diff.Unprovided :: diffs
         | Some r -> match word_of_result r with 
           | Some w -> 
-            if Bitvector.equal data w then diff 
-            else add diff key data (Some r)
-          | None -> add diff key data (Some r)) 
+            if Bitvector.equal data w then diffs 
+            else diff_imm key data (Diff.Other w) :: diffs
+          | None -> 
+            if is_mem (Bil.Result.value r) then 
+              diff_imm key data Diff.Type_error :: diffs
+            else diff_imm key data Diff.Undefined :: diffs)
  
+
   let mems_diff t ctxt = 
-    let add diff src ok er = Diff.of_mem src ok er :: diff in
     let all () = 
       Addr.Table.fold t.mems ~init:[]
-        ~f:(fun ~key ~data diff -> add diff key data None) in
+        ~f:(fun ~key ~data diffs -> diff_mem key data Diff.Unprovided :: diffs) in
     match ctxt#lookup CPU.mem with
     | None -> all ()
     | Some r -> match storage_of_result r with
       | None -> all ()
       | Some s ->
-        Addr.Table.fold t.mems ~init:[] ~f:(fun ~key ~data diff ->
+        Addr.Table.fold t.mems ~init:[] ~f:(fun ~key ~data diffs ->
             let w = Bitvector.bitwidth data in
             match load s key w with
-            | None -> add diff key data None
+            | None -> diff_mem key data Diff.Unprovided :: diffs
             | Some w -> 
-              if Bitvector.equal w data then diff
-              else add diff key data (Some r))
+              if Bitvector.equal w data then diffs
+              else diff_mem key data (Diff.Other w) :: diffs)
 
   let diff t ctxt = vars_diff t ctxt @ mems_diff t ctxt
 

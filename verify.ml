@@ -11,7 +11,7 @@ module type V = sig
   type t
   val create : Trace.t -> t
   val execute: Trace.t -> t
-  val report: t -> Report.light
+  val report: t -> Report.brief
 end
 
 module type D = sig
@@ -19,6 +19,7 @@ module type D = sig
   val create : Trace.t -> t
   val until_mismatch: t -> t option
   val find: Trace.t -> string -> Report.Record.t option
+  val find_all: Trace.t -> string -> Report.Record.t list
   val report: t -> Report.debug
 end
 
@@ -167,10 +168,10 @@ module Common(T : Veri_types.T) = struct
 
 end
 
-module Veri_light(T : Veri_types.T) = struct
+module Veri_brief(T : Veri_types.T) = struct
 
   include Common(T)
-  module Report = Report.Light
+  module Report = Report.Brief
 
   type t = Report.t veri
 
@@ -185,12 +186,12 @@ module Veri_light(T : Veri_types.T) = struct
    
   let perform_compare t point = 
     match prepare_compare t.context point with
-    | Error _ -> {t with report = Report.succ_undef t.report}
+    | Error _ -> {t with report = Report.succ t.report `Undef}
     | Ok {insns; ctxt} -> 
       if Context.is_different t.context ctxt then
         update_histo t insns 
       else 
-        {t with report = Report.succ_right t.report}
+        {t with report = Report.succ t.report `Right}
 
   (** [step t] - processes such number events from trace, that are needed
       to get next compare result. And returns None if number events in a 
@@ -231,10 +232,10 @@ module Veri_debug(T : Veri_types.T) = struct
    
   let perform_compare t point = 
     match prepare_compare t.context point with
-    | Error _ -> {t with report = Report.succ_undef t.report}
+    | Error _ -> {t with report = Report.succ t.report `Undef}
     | Ok {insns; ctxt} -> 
       match Context.diff t.context ctxt with
-      | [] -> {t with report = Report.succ_right t.report}
+      | [] -> {t with report = Report.succ t.report `Right}
       | diff -> 
         let record = Record.create point.code ctxt diff in
         update_histo t insns record
@@ -261,7 +262,7 @@ module Veri_debug(T : Veri_types.T) = struct
       | Some _ ->
         let ctxt = eval t.context point insns in
         match Context.diff t.context ctxt with
-        | [] -> {t with report = Report.succ_right t.report}
+        | [] -> {t with report = Report.succ t.report `Right}
         | diff -> 
           let record = Record.create point.code ctxt diff in
           update_histo t insns record
@@ -273,16 +274,14 @@ module Veri_debug(T : Veri_types.T) = struct
       | None -> None
       | Some p -> 
         let t' = single_compare t' p insn_name in
-        match Report.find t'.report insn_name with
-        | [] -> run t'
-        | r::_ -> Some r in
+        Report.find t'.report insn_name in
     run (create trace)
 
   let find_all trace insn_name = 
     let rec run t =
       let p, t' = next_compare_point t in
       match p with
-      | None -> Report.find t'.report insn_name
+      | None -> Report.find_all t'.report insn_name
       | Some p -> 
         let t' = single_compare t' p insn_name in
         run t' in
@@ -291,7 +290,7 @@ end
 
 let create arch = 
   let module T = (val (Veri_types.t_of_arch arch)) in
-  (module Veri_light(T) : V)
+  (module Veri_brief(T) : V)
 
 let create_debug arch = 
   let module T = (val (Veri_types.t_of_arch arch)) in

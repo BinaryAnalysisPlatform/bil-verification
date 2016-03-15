@@ -19,6 +19,7 @@ BuildDepends: bap,
               findlib.dynload,
               ppx_fields_conv
 
+
 Library "veri"
   Path: .
   FindLibName: veri
@@ -29,6 +30,6 @@ Library "veri"
 Executable "main"
   Path:           .
   MainIs:         main.ml
-  Install:        false
+  Install:        true
   CompiledObject: best
   BuildDepends:   veri, cmdliner
