@@ -30,6 +30,7 @@ type compare_point = {
   side : event list;
 }
 
+(** describes a point after execution *)
 type executed = {
   insns: (mem * (Dis.asm, Dis.kinds) Dis.insn) list;
   ctxt : Bili.context;
@@ -38,28 +39,6 @@ type executed = {
 type events_reader =
   | Started of event * (event Seq.t)
   | Finished
-
-let next_compare_point reader = 
-  let is_code = Value.is Event.code_exec in
-  let get_code_exn = Value.get_exn Event.code_exec in
-  let make_point code side = match code with
-    | Some code -> Some {code = get_code_exn code; side;} 
-    | None -> None in
-  let rec run code side events = match Seq.next events with 
-    | None -> make_point code (List.rev side), Finished
-    | Some (event, events') -> 
-      if is_code event then
-        match code with 
-        | None -> run (Some event) side events'
-        | Some code as code' -> 
-          let comp_point = make_point code' (List.rev side) in
-          comp_point, Started (event, events')
-      else run code (event::side) events' in
-  match reader with 
-  | Finished -> None, reader
-  | Started (ev, evs) -> 
-    if is_code ev then run (Some ev) [] evs
-    else run None [ev] evs
 
 let insns_of_mem dis mem = 
   let open Or_error in
@@ -76,13 +55,10 @@ let insns_of_mem dis mem =
 let move_cell ev = Move.cell ev
 let move_data ev = Move.data ev
 
-(** [name_of_insns insns] - returns name of last instruction in [insns]  *)
-let name_of_insns = function
-  | [] -> None
-  | insns ->
-    let (_, insn) = List.hd_exn (List.rev insns) in      
-    let name = Insn.(name (of_basic insn)) in
-    Some name
+(** [name_of_insns insns] - returns a name of last instruction in [insns]  *)
+let name_of_insns insns = 
+  Option.(List.hd (List.rev insns) >>|
+          fun (_,insn) -> Insn.(name (of_basic insn)))
 
 module Common(T : Veri_types.T) = struct
 
@@ -148,16 +124,46 @@ module Common(T : Veri_types.T) = struct
     let evs = List.filter ~f:(is_init_event context) point.side in
     List.iter evs ~f:(eval_event context)
 
-  let eval_compare context point =
-    match insns_of_chunk point.code with
-    | Error er as res -> res
-    | Ok insns -> 
-      let bil = List.filter_map ~f:lift_insn insns |> List.concat in
-      let () = init_stage context point in
-      let exec_ctxt = Context.to_bili_context context in
-      let exec_ctxt' = Stmt.eval bil exec_ctxt in
-      let () = List.iter ~f:(eval_event context) point.side in
-      Ok {insns; ctxt = exec_ctxt'}
+  let next_compare_point t = 
+    let is_code = Value.is Event.code_exec in
+    let get_code_exn = Value.get_exn Event.code_exec in
+    let make_point code side = match code with
+      | Some code -> Some {code = get_code_exn code; side;} 
+      | None -> None in
+    let rec run code side events = match Seq.next events with 
+      | None -> make_point code (List.rev side), Finished
+      | Some (event, events') -> 
+        if is_code event then
+          match code with 
+          | None -> run (Some event) side events'
+          | Some code as code' -> 
+            let comp_point = make_point code' (List.rev side) in
+            comp_point, Started (event, events')
+        else run code (event::side) events' in
+    match t.events with 
+    | Finished -> None, t
+    | Started (ev, evs) -> 
+      let p, events = 
+        if is_code ev then run (Some ev) [] evs
+        else run None [ev] evs in
+      p, {t with events}
+
+  let eval_base context point = List.iter ~f:(eval_event context) point.side 
+
+  let eval_insns context insns =
+    let bil = List.filter_map ~f:lift_insn insns |> List.concat in
+    Context.to_bili_context context |>
+    Stmt.eval bil
+
+  let eval context point insns =
+    let () = init_stage context point in
+    let ctxt = eval_insns context insns in
+    let () = eval_base context point in
+    ctxt 
+
+  let prepare_compare context point =
+    Or_error.(insns_of_chunk point.code >>| 
+              fun insns -> {insns; ctxt = eval context point insns})
 
 end
 
@@ -178,7 +184,7 @@ module Veri_light(T : Veri_types.T) = struct
       t
    
   let perform_compare t point = 
-    match eval_compare t.context point with
+    match prepare_compare t.context point with
     | Error _ -> {t with report = Report.succ_undef t.report}
     | Ok {insns; ctxt} -> 
       if Context.is_different t.context ctxt then
@@ -190,8 +196,7 @@ module Veri_light(T : Veri_types.T) = struct
       to get next compare result. And returns None if number events in a 
       trace is not enough to do it. *)
   let step t = 
-    let p,events = next_compare_point t.events in
-    let t' = {t with events} in
+    let p,t' = next_compare_point t in
     match p with
     | Some p -> Some (perform_compare t' p)
     | None -> None
@@ -225,7 +230,7 @@ module Veri_debug(T : Veri_types.T) = struct
       t
    
   let perform_compare t point = 
-    match eval_compare t.context point with
+    match prepare_compare t.context point with
     | Error _ -> {t with report = Report.succ_undef t.report}
     | Ok {insns; ctxt} -> 
       match Context.diff t.context ctxt with
@@ -237,8 +242,7 @@ module Veri_debug(T : Veri_types.T) = struct
   let until_mismatch t = 
     let start = Report.wrong t.report in
     let rec run t =
-      let p, events = next_compare_point t.events in
-      let t' = {t with events} in
+      let p, t' = next_compare_point t in
       match p with
       | None -> None 
       | Some p -> 
@@ -247,20 +251,42 @@ module Veri_debug(T : Veri_types.T) = struct
         else run t' in
     run t
 
+  let single_compare t point insn_name = 
+    match insns_of_chunk point.code with
+    | Error _ -> t
+    | Ok insns ->
+      match name_of_insns insns with
+      | None -> t
+      | Some name when name <> insn_name -> t
+      | Some _ ->
+        let ctxt = eval t.context point insns in
+        match Context.diff t.context ctxt with
+        | [] -> {t with report = Report.succ_right t.report}
+        | diff -> 
+          let record = Record.create point.code ctxt diff in
+          update_histo t insns record
+
   let find trace insn_name = 
-    let t = create trace in
     let rec run t =
-      let p, events = next_compare_point t.events in
-      let t' = {t with events} in
+      let p, t' = next_compare_point t in
       match p with
       | None -> None
       | Some p -> 
-        let t' = perform_compare t'  p in
+        let t' = single_compare t' p insn_name in
         match Report.find t'.report insn_name with
         | [] -> run t'
         | r::_ -> Some r in
-    run t
+    run (create trace)
 
+  let find_all trace insn_name = 
+    let rec run t =
+      let p, t' = next_compare_point t in
+      match p with
+      | None -> Report.find t'.report insn_name
+      | Some p -> 
+        let t' = single_compare t' p insn_name in
+        run t' in
+    run (create trace)
 end
 
 let create arch = 

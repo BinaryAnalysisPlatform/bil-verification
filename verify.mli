@@ -32,6 +32,10 @@ module type D = sig
       until first mis-matching instruction [insn_name]. *)
   val find: Trace.t -> string -> Record.t option
 
+  (** [find_all trace insn_name] - returns all records for
+      given instruction [insn_name] from trace. *)
+  val find_all: Trace.t -> string -> Record.t list
+
   (** [report t] - returns a report of trace execution. *)
   val report: t -> Veri_report.debug
 
