@@ -1,5 +1,4 @@
 open Bap.Std
-open Bap_traces.Std 
 
 (**  Report module.
 
