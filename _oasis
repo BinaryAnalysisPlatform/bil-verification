@@ -22,7 +22,6 @@ BuildDepends: bap,
 Library "veri"
   Path: lib
   FindLibName: veri
-  BuildTools: ocamlbuild
   Modules: Veri, Veri_context, Veri_types, Veri_report
   CompiledObject: best
 

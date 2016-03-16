@@ -9,6 +9,6 @@
 /setup.ml
 /myocamlbuild.ml
 /_tags
-/META
+*META
 /configure
 
