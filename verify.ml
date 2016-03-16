@@ -30,8 +30,9 @@ type compare_point = {
 
 (** type executed describes a point after execution *)
 type executed = {
-  insns: (mem * (Dis.asm, Dis.kinds) Dis.insn) list;
-  ctxt : Bili.context;
+  insns : (mem * (Dis.asm, Dis.kinds) Dis.insn) list;
+  start : Bili.context;
+  finish: Bili.context;
 }
 
 type events_reader =
@@ -152,26 +153,23 @@ module Verification(T : Veri_types.T) = struct
 
   let eval_base context point = List.iter ~f:(eval_event context) point.side 
 
-  let eval_insns context insns =
-    let bil = List.filter_map ~f:lift_insn insns |> List.concat in
-    Context.to_bili_context context |>
-    Stmt.eval bil
-
-  let eval context point insns =
+  let eval context point insns = 
     let () = init_stage context point in
-    let ctxt = eval_insns context insns in
+    let start = Context.to_bili_context context in
     let () = eval_base context point in
-    ctxt 
-
+    let bil = List.filter_map ~f:lift_insn insns |> List.concat in
+    let finish = Stmt.eval bil start in
+    {insns; start; finish}
+   
   let prepare_compare context point =
     Or_error.(insns_of_chunk point.code >>| 
-              fun insns -> {insns; ctxt = eval context point insns})
+              fun insns -> eval context point insns)
   
   let brief_compare t point = 
     match prepare_compare t.context point with
     | Error _ -> succ t `Undef
-    | Ok {insns; ctxt} -> 
-      if Context.is_different t.context ctxt then
+    | Ok {insns; finish;} -> 
+      if Context.is_different t.context finish then
         match name_of_insns insns with
         | Some name -> succ t (`Wrong name)
         | None -> t
@@ -187,15 +185,28 @@ module Verification(T : Veri_types.T) = struct
         eval_base t.context point;
         t, None
       | Some _ ->
-        let ctxt = eval t.context point insns in
-        match Context.diff t.context ctxt with
+        let exec = eval t.context point insns in
+        match Context.diff t.context exec.finish with
         | [] -> succ t `Right, None
         | diff -> 
           match name_of_insns insns with
           | None -> t, None
           | Some name ->
-            let record = Record.create name point.code ctxt diff in
+            let record = Record.create name point.code exec.start diff in
             succ t (`Wrong name), Some record
+
+  let perform_compare t point = 
+    match prepare_compare t.context point with
+    | Error _ -> succ t `Undef, None
+    | Ok {insns; start; finish;} -> 
+      match Context.diff t.context finish with
+      | [] -> succ t `Right, None
+      | diff -> 
+        match name_of_insns insns with
+        | None -> t, None
+        | Some name -> 
+          let record = Record.create name point.code start diff in
+          succ t (`Wrong name), Some record
 
   let execute trace = 
     let rec run t = 
@@ -212,19 +223,6 @@ module Verification(T : Veri_types.T) = struct
         let t', _ = single_compare t' point insn_name in
         run t' in
     run (create trace)
-
-  let perform_compare t point = 
-    match prepare_compare t.context point with
-    | Error _ -> succ t `Undef, None
-    | Ok {insns; ctxt} -> 
-      match Context.diff t.context ctxt with
-      | [] -> succ t `Right, None
-      | diff -> 
-        match name_of_insns insns with
-        | None -> t, None
-        | Some name -> 
-          let record = Record.create name point.code ctxt diff in
-          succ t (`Wrong name), Some record
 
   let step t = 
     let rec run t =
