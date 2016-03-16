@@ -28,7 +28,7 @@ type compare_point = {
   side : event list;
 }
 
-(** inst extended with it's name *)
+(** instruction extended by it's name *)
 type insn_descr = {
   name : string;
   insns: (mem * (Dis.asm, Dis.kinds) Dis.insn) list;
@@ -167,22 +167,30 @@ module Verification(T : Veri_types.T) = struct
     let bil = List.filter_map ~f:lift_insn descr.insns |> List.concat in
     match bil with 
     | [] -> None 
-    | bil ->
-      let finish = Stmt.eval bil start in
-      Some {descr; start; finish}
+    | bil -> Some {descr; start; finish = Stmt.eval bil start}
    
-  let prepare_compare context point =
+  let prepare_args context point =
     match insns_of_chunk point.code with
     | Error _ -> None
     | Ok insns -> eval context point insns
 
   let brief_compare t point = 
-    match prepare_compare t.context point with
+    match prepare_args t.context point with
     | None -> succ t `Undef
     | Some {descr; finish;} -> 
       if Context.is_different t.context finish then
         succ t (`Wrong descr.name)
       else succ t `Right
+
+  let detail_compare t point = 
+    match prepare_args t.context point with
+    | None -> succ t `Undef, None
+    | Some {descr; start; finish;} -> 
+      match Context.diff t.context finish with
+      | [] -> succ t `Right, None
+      | diff -> 
+        let record = Record.create descr.name point.code start diff in
+        succ t (`Wrong descr.name), Some record
 
   let insn_compare t point insn_name = 
     match insns_of_chunk point.code with
@@ -200,16 +208,6 @@ module Verification(T : Veri_types.T) = struct
           | diff -> 
             succ t (`Wrong insn_name),
             Some (Record.create insn_name point.code exec.start diff)
-
-  let perform_compare t point = 
-    match prepare_compare t.context point with
-    | None -> succ t `Undef, None
-    | Some {descr; start; finish;} -> 
-      match Context.diff t.context finish with
-      | [] -> succ t `Right, None
-      | diff -> 
-        let record = Record.create descr.name point.code start diff in
-        succ t (`Wrong descr.name), Some record
 
   let execute trace = 
     let rec run t = 
@@ -232,7 +230,7 @@ module Verification(T : Veri_types.T) = struct
       let p, t' = next_compare_point t in
       match p with
       | None -> None 
-      | Some p -> match perform_compare t' p with
+      | Some p -> match detail_compare t' p with
         | t', None -> run t'
         | t', Some record -> Some (record, t') in
     run t

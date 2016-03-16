@@ -40,16 +40,12 @@ module Make (Types : Veri_types.T) : T = struct
 
   let init t =
     let open CPU in
-    let reg_size reg = match Var.typ reg with
+    let init_size reg = match Var.typ reg with
       | Type.Imm sz -> Bitvector.of_int ~width:sz 0 
       | _ -> invalid_arg "Veri_context.init: must be Imm" in
-    let init_reg reg = 
-      update_var t reg (reg_size reg) in
-    update_var t zf Bitvector.b0;
-    update_var t cf Bitvector.b0;
-    update_var t vf Bitvector.b0;
-    update_var t nf Bitvector.b0;
-    Var.Set.iter gpr init_reg
+    let init_reg reg = update_var t reg (init_size reg) in
+    Var.Set.iter gpr init_reg;
+    List.iter ~f:init_reg [zf; cf; vf; nf;]
 
   let create () = 
     let vars = Var.Table.create () in
@@ -64,6 +60,12 @@ module Make (Types : Veri_types.T) : T = struct
     let open Bil in
     match Result.value v with 
     | Mem s -> Some s
+    | _ -> None
+
+  let word_of_result v = 
+    let open Bil in
+    match Result.value v with
+    | Imm w -> Some w
     | _ -> None
 
   let save s addr data = 
@@ -104,12 +106,6 @@ module Make (Types : Veri_types.T) : T = struct
     | Bil.Mem _ -> true
     | _ -> false
 
-  let word_of_result v = 
-    let open Bil in
-    match Result.value v with
-    | Imm w -> Some w
-    | _ -> None
-
   let diff_imm var ok er = Diff.(Imm (var, {ok; er})) 
   let diff_mem addr ok er = Diff.(Mem (addr, {ok; er})) 
 
@@ -125,7 +121,7 @@ module Make (Types : Veri_types.T) : T = struct
             if is_mem (Bil.Result.value r) then 
               diff_imm key data Diff.Type_error :: diffs
             else diff_imm key data Diff.Undefined :: diffs)
-      
+
   let full_mem_diff t =
     Addr.Table.fold t.mems ~init:[]
       ~f:(fun ~key ~data diffs -> diff_mem key data Diff.Unprovided :: diffs) 
