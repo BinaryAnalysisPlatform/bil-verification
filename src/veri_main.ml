@@ -11,19 +11,19 @@ module Run = struct
   let _ = Plugins.load () 
 
   let string_of_error = function
-  | `Protocol_error er -> 
-    Printf.sprintf "protocol error: %s" 
-      (Info.to_string_hum (Error.to_info er))
-  | `System_error er -> 
-    Printf.sprintf "system error: %s" (Unix.error_message er)
-  | `No_provider -> "no provider"
-  | `Ambiguous_uri -> "ambiguous uri"
+    | `Protocol_error er -> 
+      Printf.sprintf "protocol error: %s" 
+        (Info.to_string_hum (Error.to_info er))
+    | `System_error er -> 
+      Printf.sprintf "system error: %s" (Unix.error_message er)
+    | `No_provider -> "no provider"
+    | `Ambiguous_uri -> "ambiguous uri"
 
   let run file =
     let uri = Uri.of_string ("file://" ^ file) in
     match Trace.load uri with
     | Error er -> 
-      Printf.eprintf "error during load trace: %s\n" (string_of_error er)
+      Printf.eprintf "error during loading trace: %s\n" (string_of_error er)
     | Ok trace ->
       match Dict.find (Trace.meta trace) Meta.arch with
       | Some arch ->
@@ -35,7 +35,7 @@ end
 
 let filename = 
   let doc = "Input filename" in 
-   Arg.(required & pos 0 (some non_dir_file) None & info [] ~doc ~docv:"FILE") 
+  Arg.(required & pos 0 (some non_dir_file) None & info [] ~doc ~docv:"FILE") 
 
 let info =
   let doc = "Bil verification tool" in
