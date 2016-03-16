@@ -6,13 +6,13 @@ Authors:     BAP Team
 Maintainers: Ivan Gotovchits <ivg@ieee.org>,
              Oleg Kamenkov <forown@yandex.ru>
 License:     MIT
-Copyrights:  (C) 2014 Carnegie Mellon University
+Copyrights:  (C) 2015 Carnegie Mellon University
 Plugins:     META (0.4), DevFiles (0.4)
 BuildTools: ocamlbuild
 
 Library veri
   Path: lib
-  FindLibName: veri
+  FindLibName: bap-veri
   Modules: Veri, Veri_context, Veri_types, Veri_report
   CompiledObject: best
   BuildDepends: bap, bap-traces, ppx_fields_conv
@@ -21,4 +21,4 @@ Executable veri_main
   Path:           src
   MainIs:         veri_main.ml
   CompiledObject: best
-  BuildDepends:   bap, bap.plugins, cmdliner, findlib.dynload, veri
+  BuildDepends:   bap, bap.plugins, cmdliner, findlib.dynload, bap-veri
