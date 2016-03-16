@@ -5,6 +5,7 @@ module Run = struct
   open Bap.Std
   open Bap_traces.Std
   open Bap_plugins.Std
+  open Veri_types
 
   let () = Frame_trace_plugin.register ()
 
@@ -17,11 +18,16 @@ module Run = struct
       | Error er -> Printf.printf "error during load trace\n"
       | Ok trace ->
         let (module V : Verify.V) = Verify.create arch in
+        let v = V.create trace in
+        V.iter v ~f:(fun r -> 
+            Format.fprintf Format.std_formatter "%s:\n%a\n"
+              (Record.name r) Diffs.pp (Record.diff r))
+        
         (* match V.count trace "SUBri" with *)
         (* | None -> Printf.printf "none\n" *)
         (* | Some cnt -> Printf.printf "count: %d \n" cnt *)
-        let report = V.execute trace in
-        Veri_report.Brief.pp Format.std_formatter report
+
+        (* Veri_report.pp Format.std_formatter (V.execute trace) *)
 
 end
 

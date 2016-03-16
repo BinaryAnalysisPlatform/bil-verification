@@ -27,9 +27,9 @@ Library "veri"
   Modules: Verify, Veri_context, Veri_types, Veri_report
   CompiledObject: best
 
-# Executable "main"
-#   Path:           .
-#   MainIs:         main.ml
-#   Install:        true
-#   CompiledObject: best
-#   BuildDepends:   veri, cmdliner
+Executable "main"
+  Path:           .
+  MainIs:         main.ml
+  Install:        true
+  CompiledObject: best
+  BuildDepends:   veri, cmdliner

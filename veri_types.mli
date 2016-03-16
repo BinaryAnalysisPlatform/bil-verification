@@ -46,9 +46,10 @@ module Record : sig
   (** [create insn_name code ctxt diff]  *)
   val create: string -> Chunk.t -> Bili.context -> diff list -> t
 
+  val name: t -> string
   val code: t -> Chunk.t
   val ctxt: t -> Bili.context
-  val diff: t -> diff list
+  val diff: t -> diffs
 end
 
 type record = Record.t

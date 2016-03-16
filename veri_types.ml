@@ -41,9 +41,7 @@ module Diff = struct
     [@@deriving bin_io, sexp]
 
   let string_of_er = function 
-    | Other w -> 
-      let s = Bitvector.string_of_value ~hex:true w in
-      Printf.sprintf "other %s" s
+    | Other w -> "other " ^  Word.pps () w
     | Unprovided -> "unprovided"
     | Undefined -> "undefined"
     | Type_error -> "type_error"
