@@ -2,20 +2,22 @@ open Core_kernel.Std
 open Bap.Std
 open Bap_traces.Std
 open Trace
+open Veri_types
 
 module Dis = Disasm_expert.Basic
 module Report = Veri_report
-module Diff = Report.Diff
 
 module type V = sig
   type t
   val create : Trace.t -> t
-  val execute: Trace.t -> Report.brief
+  val execute: Trace.t -> Report.t
+  val step: t -> (Record.t * t) option
   val count: Trace.t -> string -> int option
-  val until_mismatch: t -> t option
-  val find: Trace.t -> string -> Report.Record.t option
-  val find_all: Trace.t -> string -> Report.Record.t list
-  val report: t -> Report.debug
+  val find: Trace.t -> string -> Record.t option
+  val find_all: Trace.t -> string -> Record.t list
+  val fold: t -> init:'a -> f:(Record.t -> 'a -> 'a) -> 'a
+  val iter: t -> f:(Record.t -> unit) -> unit
+  val report: t -> Report.t
 end
 
 (** type compare_point describes a piece of program trace
@@ -56,23 +58,25 @@ let name_of_insns insns =
   Option.(List.hd (List.rev insns) >>|
           fun (_,insn) -> Insn.(name (of_basic insn)))
 
-module Common(T : Veri_types.T) = struct
+
+module Verification(T : Veri_types.T) = struct
 
   module Context = Veri_context.Make(T) 
 
-  type 'a veri = {
+  type t = {
     events  : events_reader;
-    report  : 'a ;
+    report  : Report.t ;
     context : Context.t;
   }
 
   let endian = Arch.endian T.arch
 
-  let create_veri trace report =
+  let create trace =
     let events = match Seq.next (Trace.events trace) with
       | Some (ev, evs) -> Started (ev, evs)
       | None -> Finished in
     let context = Context.create () in
+    let report = Report.create () in
     {events; context; report;}
 
   let lift_insn (mem,insn) = match T.lift mem insn with
@@ -80,6 +84,8 @@ module Common(T : Veri_types.T) = struct
     | Error _ -> None 
 
   let report t = t.report
+
+  let succ t what = {t with report = Report.succ t.report what} 
 
   let insns_of_chunk chunk =
     let open Or_error in
@@ -160,145 +166,111 @@ module Common(T : Veri_types.T) = struct
   let prepare_compare context point =
     Or_error.(insns_of_chunk point.code >>| 
               fun insns -> {insns; ctxt = eval context point insns})
-
-end
-
-module Veri_brief(T : Veri_types.T) = struct
-
-  include Common(T)
-  module Report = Report.Brief
-
-  type t = Report.t veri
-
-  let create_brief trace = create_veri trace (Report.create ())
-
-  let update_histo t insns = 
-    match name_of_insns insns with
-    | None -> t
-    | Some name ->
-      Report.succ_wrong t.report name;
-      t
-   
-  let perform_compare t point = 
+  
+  let brief_compare t point = 
     match prepare_compare t.context point with
-    | Error _ -> {t with report = Report.succ t.report `Undef}
+    | Error _ -> succ t `Undef
     | Ok {insns; ctxt} -> 
       if Context.is_different t.context ctxt then
-        update_histo t insns 
-      else 
-        {t with report = Report.succ t.report `Right}
+        match name_of_insns insns with
+        | Some name -> succ t (`Wrong name)
+        | None -> t
+      else succ t `Right
+
+  let single_compare t point insn_name = 
+    match insns_of_chunk point.code with
+    | Error _ -> t, None
+    | Ok insns ->
+      match name_of_insns insns with
+      | None -> t, None
+      | Some name when name <> insn_name -> 
+        eval_base t.context point;
+        t, None
+      | Some _ ->
+        let ctxt = eval t.context point insns in
+        match Context.diff t.context ctxt with
+        | [] -> succ t `Right, None
+        | diff -> 
+          match name_of_insns insns with
+          | None -> t, None
+          | Some name ->
+            let record = Record.create name point.code ctxt diff in
+            succ t (`Wrong name), Some record
 
   let execute trace = 
     let rec run t = 
       let p, t' = next_compare_point t in
       match p with 
       | None -> t'.report
-      | Some p -> run (perform_compare t' p) in
-    run (create_brief trace)
+      | Some p -> run (brief_compare t' p) in
+    run (create trace)
 
   let count trace insn_name = 
     let rec run t = match next_compare_point t with 
       | None, t' -> Some (Report.wrong t'.report)
       | Some point, t' -> 
-        match insns_of_chunk point.code with
-        | Error _ -> run t'
-        | Ok insns ->
-          match name_of_insns insns with
-          | None -> run t'
-          | Some name when name <> insn_name -> 
-            eval_base t'.context point;
-            run t'
-          | Some _ ->        
-            let ctxt = eval t'.context point insns in
-            if Context.is_different t.context ctxt then
-              run (update_histo t' insns)
-            else 
-              let t' = {t with report = Report.succ t.report `Right} in
-              run t' in
-    run (create_brief trace)
-end
+        let t', _ = single_compare t' point insn_name in
+        run t' in
+    run (create trace)
 
-module Verification(T : Veri_types.T) = struct
-
-  include Common(T)
-  module Brief = Veri_brief(T)
-  module Record = Report.Record
-  module Report = Report.Debug
-
-  type t = Report.t veri
-
-  let create trace =
-    let report = Report.create () in
-    create_veri trace report
-
-  let update_histo t insns record = 
-    match name_of_insns insns with
-    | None -> t
-    | Some name ->
-      Report.succ_wrong t.report name record ;
-      t
-   
   let perform_compare t point = 
     match prepare_compare t.context point with
-    | Error _ -> {t with report = Report.succ t.report `Undef}
+    | Error _ -> succ t `Undef, None
     | Ok {insns; ctxt} -> 
       match Context.diff t.context ctxt with
-      | [] -> {t with report = Report.succ t.report `Right}
+      | [] -> succ t `Right, None
       | diff -> 
-        let record = Record.create point.code ctxt diff in
-        update_histo t insns record
+        match name_of_insns insns with
+        | None -> t, None
+        | Some name -> 
+          let record = Record.create name point.code ctxt diff in
+          succ t (`Wrong name), Some record
 
-  let until_mismatch t = 
-    let start = Report.wrong t.report in
+  let step t = 
     let rec run t =
       let p, t' = next_compare_point t in
       match p with
       | None -> None 
-      | Some p -> 
-        let t' = perform_compare t' p  in
-        if start <> Report.wrong t'.report then Some t'
-        else run t' in
+      | Some p -> match perform_compare t' p with
+        | t', None -> run t'
+        | t', Some record -> Some (record, t') in
     run t
 
-  let single_compare t point insn_name = 
-    match insns_of_chunk point.code with
-    | Error _ -> t
-    | Ok insns ->
-      match name_of_insns insns with
-      | None -> t
-      | Some name when name <> insn_name -> 
-        eval_base t.context point;
-        t
-      | Some _ ->
-        let ctxt = eval t.context point insns in
-        match Context.diff t.context ctxt with
-        | [] -> {t with report = Report.succ t.report `Right}
-        | diff -> 
-          let record = Record.create point.code ctxt diff in
-          update_histo t insns record
+  let fold t ~init ~f =
+    let rec run t acc =
+      match step t with
+      | None -> acc
+      | Some (r, t') -> 
+        let acc' = f r acc in
+        run t' acc' in
+    run t init
+
+  let iter t ~f = 
+    let f' r () = f r in
+    fold t ~init:() ~f:f'
 
   let find trace insn_name = 
     let rec run t =
       let p, t' = next_compare_point t in
       match p with
       | None -> None
-      | Some p -> 
-        let t' = single_compare t' p insn_name in
-        Report.find t'.report insn_name in
+      | Some p -> match single_compare t p insn_name with
+        | t', None -> run t'
+        | t', Some r -> Some r in
     run (create trace)
 
   let find_all trace insn_name = 
-    let rec run t =
+    let rec run t recs =
       let p, t' = next_compare_point t in
       match p with
-      | None -> Report.find_all t'.report insn_name
+      | None -> recs
       | Some p -> 
-        let t' = single_compare t' p insn_name in
-        run t' in
-    run (create trace)
+        let t', r = single_compare t' p insn_name in
+        match r with
+        | None -> run t' recs
+        | Some r -> run t' (r::recs) in
+    run (create trace) []
 
-  let execute = Brief.execute
-  let count = Brief.count
 end
 
 let create arch = 
