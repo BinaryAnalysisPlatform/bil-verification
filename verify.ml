@@ -28,9 +28,15 @@ type compare_point = {
   side : event list;
 }
 
+(** inst extended with it's name *)
+type insn_descr = {
+  name : string;
+  insns: (mem * (Dis.asm, Dis.kinds) Dis.insn) list;
+}
+
 (** type executed describes a point after execution *)
 type executed = {
-  insns : (mem * (Dis.asm, Dis.kinds) Dis.insn) list;
+  descr : insn_descr;
   start : Bili.context;
   finish: Bili.context;
 }
@@ -56,9 +62,9 @@ let move_data ev = Move.data ev
 
 (** [name_of_insns insns] - returns a name of last instruction in [insns]  *)
 let name_of_insns insns = 
-  Option.(List.hd (List.rev insns) >>|
-          fun (_,insn) -> Insn.(name (of_basic insn)))
-
+  match List.hd (List.rev insns) with
+  | None -> Or_error.error_string "instruction hasn't name"
+  | Some (_, insn) -> Ok (Insn.(name (of_basic insn)))
 
 module Verification(T : Veri_types.T) = struct
 
@@ -81,11 +87,10 @@ module Verification(T : Veri_types.T) = struct
     {events; context; report;}
 
   let lift_insn (mem,insn) = match T.lift mem insn with
-    | Ok b -> Some b
-    | Error _ -> None 
+    | Ok bil -> Some bil
+    | Error _ -> None
 
   let report t = t.report
-
   let succ t what = {t with report = Report.succ t.report what} 
 
   let insns_of_chunk chunk =
@@ -95,7 +100,9 @@ module Verification(T : Veri_types.T) = struct
           let dis = Dis.store_kinds dis |> Dis.store_asm in
           let mems = Bigstring.of_string (Chunk.data chunk) in
           Memory.create endian (Chunk.addr chunk) mems >>=
-          fun mem -> insns_of_mem dis mem)
+          fun mem -> insns_of_mem dis mem >>=
+          fun insns -> name_of_insns insns >>= 
+          fun name -> return {name; insns})
 
   let update_reg ctxt reg_event = 
     Context.update_var ctxt (move_cell reg_event) (move_data reg_event)
@@ -153,60 +160,56 @@ module Verification(T : Veri_types.T) = struct
 
   let eval_base context point = List.iter ~f:(eval_event context) point.side 
 
-  let eval context point insns = 
+  let eval context point descr = 
     let () = init_stage context point in
     let start = Context.to_bili_context context in
     let () = eval_base context point in
-    let bil = List.filter_map ~f:lift_insn insns |> List.concat in
-    let finish = Stmt.eval bil start in
-    {insns; start; finish}
+    let bil = List.filter_map ~f:lift_insn descr.insns |> List.concat in
+    match bil with 
+    | [] -> None 
+    | bil ->
+      let finish = Stmt.eval bil start in
+      Some {descr; start; finish}
    
   let prepare_compare context point =
-    Or_error.(insns_of_chunk point.code >>| 
-              fun insns -> eval context point insns)
-  
+    match insns_of_chunk point.code with
+    | Error _ -> None
+    | Ok insns -> eval context point insns
+
   let brief_compare t point = 
     match prepare_compare t.context point with
-    | Error _ -> succ t `Undef
-    | Ok {insns; finish;} -> 
+    | None -> succ t `Undef
+    | Some {descr; finish;} -> 
       if Context.is_different t.context finish then
-        match name_of_insns insns with
-        | Some name -> succ t (`Wrong name)
-        | None -> t
+        succ t (`Wrong descr.name)
       else succ t `Right
 
-  let single_compare t point insn_name = 
+  let insn_compare t point insn_name = 
     match insns_of_chunk point.code with
     | Error _ -> t, None
-    | Ok insns ->
-      match name_of_insns insns with
-      | None -> t, None
-      | Some name when name <> insn_name -> 
-        eval_base t.context point;
+    | Ok descr ->
+      if descr.name <> insn_name then
+        let () = eval_base t.context point in
         t, None
-      | Some _ ->
-        let exec = eval t.context point insns in
-        match Context.diff t.context exec.finish with
-        | [] -> succ t `Right, None
-        | diff -> 
-          match name_of_insns insns with
-          | None -> t, None
-          | Some name ->
-            let record = Record.create name point.code exec.start diff in
-            succ t (`Wrong name), Some record
+      else
+        match eval t.context point descr with
+        | None -> succ t `Undef, None
+        | Some exec -> 
+          match Context.diff t.context exec.finish with
+          | [] -> succ t `Right, None
+          | diff -> 
+            succ t (`Wrong insn_name),
+            Some (Record.create insn_name point.code exec.start diff)
 
   let perform_compare t point = 
     match prepare_compare t.context point with
-    | Error _ -> succ t `Undef, None
-    | Ok {insns; start; finish;} -> 
+    | None -> succ t `Undef, None
+    | Some {descr; start; finish;} -> 
       match Context.diff t.context finish with
       | [] -> succ t `Right, None
       | diff -> 
-        match name_of_insns insns with
-        | None -> t, None
-        | Some name -> 
-          let record = Record.create name point.code start diff in
-          succ t (`Wrong name), Some record
+        let record = Record.create descr.name point.code start diff in
+        succ t (`Wrong descr.name), Some record
 
   let execute trace = 
     let rec run t = 
@@ -220,7 +223,7 @@ module Verification(T : Veri_types.T) = struct
     let rec run t = match next_compare_point t with 
       | None, t' -> Some (Report.wrong t'.report)
       | Some point, t' -> 
-        let t', _ = single_compare t' point insn_name in
+        let t', _ = insn_compare t' point insn_name in
         run t' in
     run (create trace)
 
@@ -243,16 +246,14 @@ module Verification(T : Veri_types.T) = struct
         run t' acc' in
     run t init
 
-  let iter t ~f = 
-    let f' r () = f r in
-    fold t ~init:() ~f:f'
+  let iter t ~f = fold t ~init:() ~f:(fun r () -> f r)
 
   let find trace insn_name = 
     let rec run t =
       let p, t' = next_compare_point t in
       match p with
       | None -> None
-      | Some p -> match single_compare t p insn_name with
+      | Some p -> match insn_compare t p insn_name with
         | t', None -> run t'
         | t', Some r -> Some r in
     run (create trace)
@@ -263,7 +264,7 @@ module Verification(T : Veri_types.T) = struct
       match p with
       | None -> recs
       | Some p -> 
-        let t', r = single_compare t' p insn_name in
+        let t', r = insn_compare t' p insn_name in
         match r with
         | None -> run t' recs
         | Some r -> run t' (r::recs) in

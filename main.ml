@@ -18,16 +18,16 @@ module Run = struct
       | Error er -> Printf.printf "error during load trace\n"
       | Ok trace ->
         let (module V : Verify.V) = Verify.create arch in
-        let v = V.create trace in
-        V.iter v ~f:(fun r -> 
-            Format.fprintf Format.std_formatter "%s:\n%a\n"
-              (Record.name r) Diffs.pp (Record.diff r))
+        (* let v = V.create trace in *)
+        (* V.iter v ~f:(fun r -> *)
+        (*     Format.fprintf Format.std_formatter "%s:\n%a\n" *)
+        (*       (Record.name r) Diffs.pp (Record.diff r)) *)
         
         (* match V.count trace "SUBri" with *)
         (* | None -> Printf.printf "none\n" *)
         (* | Some cnt -> Printf.printf "count: %d \n" cnt *)
 
-        (* Veri_report.pp Format.std_formatter (V.execute trace) *)
+        Veri_report.pp Format.std_formatter (V.execute trace)
 
 end
 
