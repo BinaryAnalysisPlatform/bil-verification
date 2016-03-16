@@ -104,10 +104,6 @@ module Make (Types : Veri_types.T) : T = struct
     | Bil.Mem _ -> true
     | _ -> false
 
-  let is_imm = function 
-    | Bil.Imm _ -> true
-    | _ -> false
-
   let word_of_result v = 
     let open Bil in
     match Result.value v with
@@ -116,6 +112,7 @@ module Make (Types : Veri_types.T) : T = struct
 
   let diff_imm var ok er = Diff.(Imm (var, {ok; er})) 
   let diff_mem addr ok er = Diff.(Mem (addr, {ok; er})) 
+
   let vars_diff t ctxt = 
     Var.Table.fold t.vars ~init:[] ~f:(fun ~key ~data diffs ->
         match ctxt#lookup key with
@@ -128,16 +125,16 @@ module Make (Types : Veri_types.T) : T = struct
             if is_mem (Bil.Result.value r) then 
               diff_imm key data Diff.Type_error :: diffs
             else diff_imm key data Diff.Undefined :: diffs)
- 
+      
+  let full_mem_diff t =
+    Addr.Table.fold t.mems ~init:[]
+      ~f:(fun ~key ~data diffs -> diff_mem key data Diff.Unprovided :: diffs) 
 
   let mems_diff t ctxt = 
-    let all () = 
-      Addr.Table.fold t.mems ~init:[]
-        ~f:(fun ~key ~data diffs -> diff_mem key data Diff.Unprovided :: diffs) in
     match ctxt#lookup CPU.mem with
-    | None -> all ()
+    | None -> full_mem_diff t
     | Some r -> match storage_of_result r with
-      | None -> all ()
+      | None -> full_mem_diff t
       | Some s ->
         Addr.Table.fold t.mems ~init:[] ~f:(fun ~key ~data diffs ->
             let w = Bitvector.bitwidth data in

@@ -112,7 +112,7 @@ module Debug : sig
   val find: t -> string -> record option
   val find_all: t -> string -> record list
   val records: t -> (string * record) list
-  val to_brief: t -> extended
+  val to_brief: t -> brief
   val to_extended: t -> extended
 end
 

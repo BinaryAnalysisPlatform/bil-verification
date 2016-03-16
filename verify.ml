@@ -10,13 +10,8 @@ module Diff = Report.Diff
 module type V = sig
   type t
   val create : Trace.t -> t
-  val execute: Trace.t -> t
-  val report: t -> Report.brief
-end
-
-module type D = sig
-  type t
-  val create : Trace.t -> t
+  val execute: Trace.t -> Report.brief
+  val count: Trace.t -> string -> int option
   val until_mismatch: t -> t option
   val find: Trace.t -> string -> Report.Record.t option
   val find_all: Trace.t -> string -> Report.Record.t list
@@ -31,7 +26,7 @@ type compare_point = {
   side : event list;
 }
 
-(** describes a point after execution *)
+(** type executed describes a point after execution *)
 type executed = {
   insns: (mem * (Dis.asm, Dis.kinds) Dis.insn) list;
   ctxt : Bili.context;
@@ -175,7 +170,7 @@ module Veri_brief(T : Veri_types.T) = struct
 
   type t = Report.t veri
 
-  let create trace = create_veri trace (Report.create ())
+  let create_brief trace = create_veri trace (Report.create ())
 
   let update_histo t insns = 
     match name_of_insns insns with
@@ -193,27 +188,40 @@ module Veri_brief(T : Veri_types.T) = struct
       else 
         {t with report = Report.succ t.report `Right}
 
-  (** [step t] - processes such number events from trace, that are needed
-      to get next compare result. And returns None if number events in a 
-      trace is not enough to do it. *)
-  let step t = 
-    let p,t' = next_compare_point t in
-    match p with
-    | Some p -> Some (perform_compare t' p)
-    | None -> None
-
   let execute trace = 
-    let t = create trace in
-    let rec run t = match step t with 
-      | None -> t
-      | Some t' -> run t' in
-    run t 
+    let rec run t = 
+      let p, t' = next_compare_point t in
+      match p with 
+      | None -> t'.report
+      | Some p -> run (perform_compare t' p) in
+    run (create_brief trace)
 
+  let count trace insn_name = 
+    let rec run t = match next_compare_point t with 
+      | None, t' -> Some (Report.wrong t'.report)
+      | Some point, t' -> 
+        match insns_of_chunk point.code with
+        | Error _ -> run t'
+        | Ok insns ->
+          match name_of_insns insns with
+          | None -> run t'
+          | Some name when name <> insn_name -> 
+            eval_base t'.context point;
+            run t'
+          | Some _ ->        
+            let ctxt = eval t'.context point insns in
+            if Context.is_different t.context ctxt then
+              run (update_histo t' insns)
+            else 
+              let t' = {t with report = Report.succ t.report `Right} in
+              run t' in
+    run (create_brief trace)
 end
 
-module Veri_debug(T : Veri_types.T) = struct
+module Verification(T : Veri_types.T) = struct
 
   include Common(T)
+  module Brief = Veri_brief(T)
   module Record = Report.Record
   module Report = Report.Debug
 
@@ -258,7 +266,9 @@ module Veri_debug(T : Veri_types.T) = struct
     | Ok insns ->
       match name_of_insns insns with
       | None -> t
-      | Some name when name <> insn_name -> t
+      | Some name when name <> insn_name -> 
+        eval_base t.context point;
+        t
       | Some _ ->
         let ctxt = eval t.context point insns in
         match Context.diff t.context ctxt with
@@ -286,12 +296,11 @@ module Veri_debug(T : Veri_types.T) = struct
         let t' = single_compare t' p insn_name in
         run t' in
     run (create trace)
+
+  let execute = Brief.execute
+  let count = Brief.count
 end
 
 let create arch = 
   let module T = (val (Veri_types.t_of_arch arch)) in
-  (module Veri_brief(T) : V)
-
-let create_debug arch = 
-  let module T = (val (Veri_types.t_of_arch arch)) in
-  (module Veri_debug(T) : D)
+  (module Verification(T) : V)
