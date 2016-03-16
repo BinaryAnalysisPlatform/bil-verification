@@ -17,7 +17,7 @@ module Run = struct
       match Trace.load uri with
       | Error er -> Printf.printf "error during load trace\n"
       | Ok trace ->
-        let (module V : Verify.V) = Verify.create arch in
+        let (module V : Veri.V) = Veri.create arch in
         Veri_report.pp Format.std_formatter (V.execute trace)
 
 end

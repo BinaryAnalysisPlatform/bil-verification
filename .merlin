@@ -1,5 +1,7 @@
-B _build
-S .
+B _build/lib
+B _build/src
+S lib
+S src
 
 PKG core_kernel
 PKG cmdliner

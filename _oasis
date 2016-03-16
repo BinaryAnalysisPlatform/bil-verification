@@ -19,17 +19,16 @@ BuildDepends: bap,
               findlib.dynload,
               ppx_fields_conv
 
-
 Library "veri"
-  Path: .
+  Path: lib
   FindLibName: veri
   BuildTools: ocamlbuild
-  Modules: Verify, Veri_context, Veri_types, Veri_report
+  Modules: Veri, Veri_context, Veri_types, Veri_report
   CompiledObject: best
 
-Executable "main"
-  Path:           .
-  MainIs:         main.ml
+Executable "veri_main"
+  Path:           src
+  MainIs:         veri_main.ml
   Install:        true
   CompiledObject: best
   BuildDepends:   veri, cmdliner
