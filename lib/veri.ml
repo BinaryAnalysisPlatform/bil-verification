@@ -12,6 +12,24 @@ type point = {
   code : Chunk.t;
   side : event list
 }
+let is_first_read ctxt ev =
+  match Bap_value.get Event.register_read ev with
+  | None -> false
+  | Some mv -> Option.is_none (ctxt#lookup (Move.cell mv))
+
+let is_first_load ctxt ev = 
+  match Bap_value.get Event.memory_load ev with
+  | None -> false
+  | Some mv ->
+    match Seq.find ~f:(fun (v,_) -> v = ctxt#mem) ctxt#bindings with
+    | None -> true
+    | Some (_,s) ->
+      match value s with
+      | Bil.Mem storage -> Option.is_none (storage#load (Move.cell mv))
+      | _ -> true 
+
+let is_init_event ctxt ev =
+  is_first_read ctxt ev || is_first_load ctxt ev
 
 class context report arch = object(self:'s)
   inherit Veri_traci.context arch
@@ -23,8 +41,8 @@ class context report arch = object(self:'s)
 
   method split = 
     let self = {< events = []; descr = None >} in
-    {< selves = Some (self, self) >}
-
+    {< selves = Some (self, self); current = `Fst >}
+       
   method register_event ev = match selves with
     | None -> {< events = ev :: events >}
     | Some (main, shadow) ->
@@ -43,9 +61,11 @@ class context report arch = object(self:'s)
 
   method merge: 's = 
     let is_exists_event ev evs = 
-      List.exists ~f:(fun ev' -> ev = ev') evs in
+      List.exists ~f:(fun ev' -> ev = ev') evs in   
     let events = self#main#events in
     let events' = self#shadow#events in
+    let init = List.filter ~f:(is_init_event self#main) events' in
+    let events' = init @ events' in
     let wrong = List.fold_left ~init:0 
         ~f:(fun wrong ev -> 
             if is_exists_event ev events' then wrong
@@ -54,8 +74,8 @@ class context report arch = object(self:'s)
       if wrong = 0 then Veri_report.succ report `Right
       else match descr with
         | Some descr -> Veri_report.succ report (`Wrong descr)
-        | None -> report in
-    {<report = report; selves = None; events = []; descr = None >}
+        | None -> report in    
+    {<report = report; selves = None; >}
 
   method report = report
   method set_description s = {<descr = Some s >}

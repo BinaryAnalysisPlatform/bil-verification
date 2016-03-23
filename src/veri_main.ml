@@ -18,12 +18,12 @@ module Run = struct
     let events' = Seq.of_list events' in
     Trace.append trace' events'
 
-  let () = 
+  let () =
     List.iter
       ~f:(fun r -> match r with
           | Ok pl -> ()
           | Error (path, er) ->
-            Printf.printf "plugin at %s load failed\n" path) (Plugins.load ())
+            Printf.eprintf "plugin at %s load failed\n" path) (Plugins.load ())
 
   let string_of_error = function
     | `Protocol_error er -> 
@@ -35,7 +35,7 @@ module Run = struct
     | `Ambiguous_uri -> "ambiguous uri"
 
   let run file =
-    let uri = Uri.of_string ("file://" ^ file) in
+    let uri = Uri.of_string ("file://" ^ file) in  
     match Trace.load uri with
     | Error er -> 
       Printf.eprintf "error during loading trace: %s\n" (string_of_error er)
