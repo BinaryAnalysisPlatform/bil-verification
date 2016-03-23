@@ -6,9 +6,24 @@ module Run = struct
   open Bap_traces.Std
   open Bap_plugins.Std
 
-  open Veri_types
+  let cut trace n = 
+    let trace' = Trace.create (Trace.tool trace) in
+    let trace' = Trace.set_meta trace' (Trace.meta trace) in
+    let rec grab acc cnt evs = 
+      if cnt > n then acc
+      else match Seq.next evs with
+      | None -> acc 
+      | Some (ev, evs') -> grab (ev::acc) (cnt + 1) evs' in
+    let events' = List.rev (grab [] 0 (Trace.events trace)) in
+    let events' = Seq.of_list events' in
+    Trace.append trace' events'
 
-  let _ = Plugins.load () 
+  let () = 
+    List.iter
+      ~f:(fun r -> match r with
+          | Ok pl -> ()
+          | Error (path, er) ->
+            Printf.printf "plugin at %s load failed\n" path) (Plugins.load ())
 
   let string_of_error = function
     | `Protocol_error er -> 
@@ -27,8 +42,11 @@ module Run = struct
     | Ok trace ->
       match Dict.find (Trace.meta trace) Meta.arch with
       | Some arch ->
-        let (module V : Veri.V) = Veri.create arch in
-        Veri_report.pp Format.std_formatter (V.execute trace)
+        let report = Veri_report.create () in
+        let ctxt = new Veri.context report arch in
+        let veri  = new Veri.t (fun _ -> true) in
+        let ctxt' = Monad.State.exec (veri#eval_trace trace) ctxt in
+        Veri_report.pp Format.std_formatter ctxt'#report
       | None -> Printf.eprintf "trace of unknown arch\n"
 
 end

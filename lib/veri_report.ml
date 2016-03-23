@@ -16,13 +16,16 @@ type t = {
   wrong : int Tab.t;
   right : int;
   undef : int;
-} [@@deriving bin_io, fields, sexp]
+} [@@deriving bin_io]
 
 let create () = {
   wrong = Tab.create ();
   right = 0;
   undef = 0;
 }  
+
+let right t = t.right
+let undef t = t.undef
 
 let succ t = function 
   | `Right -> {t with right = Int.succ t.right}

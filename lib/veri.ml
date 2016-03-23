@@ -1,275 +1,187 @@
 open Core_kernel.Std
 open Bap.Std
 open Bap_traces.Std
+module Bap_value = Value
+open Bil.Result
+open Monad.State
 open Trace
-open Veri_types
 
-module Dis = Disasm_expert.Basic
-module Report = Veri_report
+let do_nothing () = return ()
 
-module type V = sig
-  type t
-  val create : Trace.t -> t
-  val execute: Trace.t -> Report.t
-  val step: t -> (Record.t * t) option
-  val count: Trace.t -> string -> int option
-  val find: Trace.t -> string -> Record.t option
-  val find_all: Trace.t -> string -> Record.t list
-  val fold: t -> init:'a -> f:(Record.t -> 'a -> 'a) -> 'a
-  val iter: t -> f:(Record.t -> unit) -> unit
-  val report: t -> Report.t
-end
-
-(** type compare_point describes a piece of program trace
-    as raw code and list of side effects that this code
-    should perform. *)
-type compare_point = {
+type point = {
   code : Chunk.t;
-  side : event list;
+  side : event list
 }
 
-(** instruction extended by it's name *)
-type insn_descr = {
-  name : string;
-  insns: (mem * (Dis.asm, Dis.kinds) Dis.insn) list;
-}
+class context report arch = object(self:'s)
+  inherit Veri_traci.context arch
+  val report : Veri_report.t = report
+  val events : event list = []
+  val selves = None
+  val current = `Fst
+  val descr : string option = None
 
-(** type executed describes a point after execution *)
-type executed = {
-  descr : insn_descr;
-  start : Bili.context;
-  finish: Bili.context;
-}
+  method split = 
+    let self = {< events = []; descr = None >} in
+    {< selves = Some (self, self) >}
 
-type events_reader =
-  | Started of event * (event Seq.t)
-  | Finished
+  method register_event ev = match selves with
+    | None -> {< events = ev :: events >}
+    | Some (main, shadow) ->
+      match current with
+      | `Fst ->
+        let main = main#register_event ev in
+        {<selves = Some (main, shadow) >}
+      | `Snd ->
+        let shadow' = shadow#register_event ev in
+        {<selves = Some (main,shadow') >}
 
-let insns_of_mem dis mem = 
-  let open Or_error in
-  let rec loop insns mem =
-    Dis.insn_of_mem dis mem >>= (fun (imem, insn, left) ->
-        let insns' = match insn with 
-          | Some insn -> (imem, insn) :: insns 
-          | None -> insns in
-        match left with
-        | `left mem -> loop insns' mem 
-        | `finished -> Ok (List.rev insns')) in 
-  loop [] mem
+  method events = events
+  method main = fst (Option.value_exn selves)
+  method shadow = snd (Option.value_exn selves)
+  method replay = {<current = `Snd; >}
 
-let move_cell ev = Move.cell ev
-let move_data ev = Move.data ev
+  method merge: 's = 
+    let is_exists_event ev evs = 
+      List.exists ~f:(fun ev' -> ev = ev') evs in
+    let events = self#main#events in
+    let events' = self#shadow#events in
+    let wrong = List.fold_left ~init:0 
+        ~f:(fun wrong ev -> 
+            if is_exists_event ev events' then wrong
+            else wrong + 1) events in    
+    let report = 
+      if wrong = 0 then Veri_report.succ report `Right
+      else match descr with
+        | Some descr -> Veri_report.succ report (`Wrong descr)
+        | None -> report in
+    {<report = report; selves = None; events = []; descr = None >}
 
-(** [name_of_insns insns] - returns a name of last instruction in [insns]  *)
-let name_of_insns insns = 
-  match List.hd (List.rev insns) with
-  | None -> Or_error.error_string "instruction hasn't name"
-  | Some (_, insn) -> Ok (Insn.(name (of_basic insn)))
-
-module Verification(T : Veri_types.T) = struct
-
-  module Context = Veri_context.Make(T) 
-
-  type t = {
-    events  : events_reader;
-    report  : Report.t ;
-    context : Context.t;
-  }
-
-  let endian = Arch.endian T.arch
-
-  let create trace =
-    let events = match Seq.next (Trace.events trace) with
-      | Some (ev, evs) -> Started (ev, evs)
-      | None -> Finished in
-    let context = Context.create () in
-    let report = Report.create () in
-    {events; context; report;}
-
-  let lift_insn (mem,insn) = match T.lift mem insn with
-    | Ok bil -> Some bil
-    | Error _ -> None
-
-  let report t = t.report
-  let succ t what = {t with report = Report.succ t.report what} 
-
-  let insns_of_chunk chunk =
-    let open Or_error in
-    Dis.with_disasm ~backend:"llvm" (Arch.to_string T.arch)
-      ~f:(fun dis ->
-          let dis = Dis.store_kinds dis |> Dis.store_asm in
-          let mems = Bigstring.of_string (Chunk.data chunk) in
-          Memory.create endian (Chunk.addr chunk) mems >>=
-          fun mem -> insns_of_mem dis mem >>=
-          fun insns -> name_of_insns insns >>= 
-          fun name -> return {name; insns})
-
-  let update_reg ctxt reg_event = 
-    Context.update_var ctxt (move_cell reg_event) (move_data reg_event)
-
-  let update_mem ctxt mem_event =
-    Context.update_mem ctxt (move_cell mem_event) (move_data mem_event)
-
-  let eval_event ctxt event =
-    let open Trace in
-    Value.Match.(begin
-        select @@
-        case Event.register_write (fun m -> update_reg ctxt m) @@
-        case Event.register_read (fun m -> update_reg ctxt m) @@
-        case Event.memory_load (fun m -> update_mem ctxt m) @@
-        case Event.memory_store (fun m -> update_mem ctxt m) @@
-        default (fun () -> ())
-      end) event
-
-  let is_init_event context ev = 
-    Value.Match.(
-      select @@
-      case Event.register_read 
-        (fun m -> not (Context.exists_var context (move_cell m))) @@
-      case Event.memory_load 
-        (fun m -> not (Context.exists_mem context (move_cell m))) @@
-      default (fun () -> false)) ev
-
-  let init_stage context point = 
-    let evs = List.filter ~f:(is_init_event context) point.side in
-    List.iter evs ~f:(eval_event context)
-
-  let next_compare_point t = 
-    let is_code = Value.is Event.code_exec in
-    let get_code_exn = Value.get_exn Event.code_exec in
-    let make_point code side = match code with
-      | Some code -> Some {code = get_code_exn code; side;} 
-      | None -> None in
-    let rec run code side events = match Seq.next events with 
-      | None -> make_point code (List.rev side), Finished
-      | Some (event, events') -> 
-        if is_code event then
-          match code with 
-          | None -> run (Some event) side events'
-          | Some code as code' -> 
-            let comp_point = make_point code' (List.rev side) in
-            comp_point, Started (event, events')
-        else run code (event::side) events' in
-    match t.events with 
-    | Finished -> None, t
-    | Started (ev, evs) -> 
-      let p, events = 
-        if is_code ev then run (Some ev) [] evs
-        else run None [ev] evs in
-      p, {t with events}
-
-  let eval_base context point = List.iter ~f:(eval_event context) point.side 
-
-  let eval context point descr = 
-    let () = init_stage context point in
-    let start = Context.to_bili_context context in
-    let () = eval_base context point in
-    let bil = List.filter_map ~f:lift_insn descr.insns |> List.concat in
-    match bil with 
-    | [] -> None 
-    | bil -> Some {descr; start; finish = Stmt.eval bil start}
-   
-  let prepare_args context point =
-    match insns_of_chunk point.code with
-    | Error _ -> None
-    | Ok insns -> eval context point insns
-
-  let brief_compare t point = 
-    match prepare_args t.context point with
-    | None -> succ t `Undef
-    | Some {descr; finish;} -> 
-      if Context.is_different t.context finish then
-        succ t (`Wrong descr.name)
-      else succ t `Right
-
-  let detail_compare t point = 
-    match prepare_args t.context point with
-    | None -> succ t `Undef, None
-    | Some {descr; start; finish;} -> 
-      match Context.diff t.context finish with
-      | [] -> succ t `Right, None
-      | diff -> 
-        let record = Record.create descr.name point.code start diff in
-        succ t (`Wrong descr.name), Some record
-
-  let insn_compare t point insn_name = 
-    match insns_of_chunk point.code with
-    | Error _ -> t, None
-    | Ok descr ->
-      if descr.name <> insn_name then
-        let () = eval_base t.context point in
-        t, None
-      else
-        match eval t.context point descr with
-        | None -> succ t `Undef, None
-        | Some exec -> 
-          match Context.diff t.context exec.finish with
-          | [] -> succ t `Right, None
-          | diff -> 
-            succ t (`Wrong insn_name),
-            Some (Record.create insn_name point.code exec.start diff)
-
-  let execute trace = 
-    let rec run t = 
-      let p, t' = next_compare_point t in
-      match p with 
-      | None -> t'.report
-      | Some p -> run (brief_compare t' p) in
-    run (create trace)
-
-  let count trace insn_name = 
-    let rec run t = match next_compare_point t with 
-      | None, t' -> Some (Report.wrong t'.report)
-      | Some point, t' -> 
-        let t', _ = insn_compare t' point insn_name in
-        run t' in
-    run (create trace)
-
-  let step t = 
-    let rec run t =
-      let p, t' = next_compare_point t in
-      match p with
-      | None -> None 
-      | Some p -> match detail_compare t' p with
-        | t', None -> run t'
-        | t', Some record -> Some (record, t') in
-    run t
-
-  let fold t ~init ~f =
-    let rec run t acc =
-      match step t with
-      | None -> acc
-      | Some (r, t') -> 
-        let acc' = f r acc in
-        run t' acc' in
-    run t init
-
-  let iter t ~f = fold t ~init:() ~f:(fun r () -> f r)
-
-  let find trace insn_name = 
-    let rec run t =
-      let p, t' = next_compare_point t in
-      match p with
-      | None -> None
-      | Some p -> match insn_compare t p insn_name with
-        | t', None -> run t'
-        | t', Some r -> Some r in
-    run (create trace)
-
-  let find_all trace insn_name = 
-    let rec run t recs =
-      let p, t' = next_compare_point t in
-      match p with
-      | None -> recs
-      | Some p -> 
-        let t', r = insn_compare t' p insn_name in
-        match r with
-        | None -> run t' recs
-        | Some r -> run t' (r::recs) in
-    run (create trace) []
-
+  method report = report
+  method set_description s = {<descr = Some s >}
 end
 
-let create arch = 
-  let module T = (val (Veri_types.t_of_arch arch)) in
-  (module Verification(T) : V)
+let create_move_event tag cell' data' =  
+  Bap_value.create tag Move.({cell = cell'; data = data';})   
+
+let create_mem_store = create_move_event Event.memory_store
+let create_mem_load  = create_move_event Event.memory_load
+let create_reg_read  = create_move_event Event.register_read
+let create_reg_write = create_move_event Event.register_write
+
+let is_imm_var var = 
+  let open Type in
+  match Var.typ var with
+  | Imm _ -> true
+  | _ -> false
+
+let is_mem_var var = 
+  let open Type in
+  match Var.typ var with
+  | Mem _ -> true
+  | _ -> false
+
+let imm_result v = 
+  let open Bil in
+  match v with
+  | Imm x -> Some x
+  | _ -> None
+
+let mem_result v = 
+  let open Bil in
+  match v with
+  | Mem x -> Some x
+  | _ -> None
+
+type 'a e = (event option, 'a) Monad.State.t
+
+class ['a] t is_interesting = object(self)
+  constraint 'a = #context
+  inherit ['a] Veri_traci.t as super
+
+  method private update_event ev =
+    if is_interesting ev then
+      get () >>= fun s -> put @@ s#register_event ev
+    else do_nothing ()
+        
+  method! lookup var : 'a r =
+    super#lookup var >>= fun r -> 
+    if is_imm_var var then 
+      match imm_result (value r) with 
+      | Some data -> 
+        self#update_event (create_reg_read var data) >>= fun () ->
+        return r
+      | None -> return r
+    else return r
+
+  method! update var result : 'a u = 
+    super#update var result >>= fun () -> 
+    if is_imm_var var then 
+      match imm_result (value result) with 
+      | Some data -> self#update_event (create_reg_write var data)
+      | None -> do_nothing ()
+    else do_nothing ()
+
+  method private eval_mem_event tag addr data : 'a e = 
+    match value addr, value data with
+    | Bil.Imm addr, Bil.Imm data ->
+      let ev = create_move_event tag addr data in
+      return (Some ev)
+    | _ -> return None
+
+  method! eval_store: mem:exp -> addr:exp -> exp -> endian -> size -> 'a r =
+    fun ~mem ~addr data endian size ->
+      super#eval_store ~mem ~addr data endian size >>= fun r ->
+      self#eval_exp addr >>= fun addr ->
+      self#eval_exp data >>= fun data ->
+      self#eval_mem_event Event.memory_store addr data >>=
+      fun ev -> match ev with
+      | None -> return r
+      | Some ev -> self#update_event ev >>= fun () -> return r
+
+  method! eval_load: mem:exp -> addr:exp -> endian -> size -> 'a r =
+    fun ~mem ~addr endian size ->
+      super#eval_load ~mem ~addr endian size >>= fun r ->
+      self#eval_exp addr >>= fun addr ->
+      self#eval_mem_event Event.memory_load addr r >>=
+      fun ev -> match ev with
+      | None -> return r
+      | Some ev -> self#update_event ev >>= fun () -> return r
+
+  method private eval_chunk arch chunk = 
+    match Veri_helpers.bil_of_chunk arch chunk with
+    | Error _ -> do_nothing ()
+    | Ok (name, bil) ->
+      self#eval bil >>= fun () -> get () >>= fun ctxt ->      
+      put (ctxt#set_description name)
+
+  method private step point = 
+    get () >>= fun ctxt -> put ctxt#split >>= fun () ->
+    List.fold ~init:(return ()) ~f:(fun sm ev -> 
+        sm >>= fun () -> self#eval_event ev) point.side >>= fun () ->
+    get () >>= fun ctxt -> put (ctxt#replay) >>= fun () ->
+    self#eval_chunk ctxt#arch point.code >>= fun () ->
+    get () >>= fun ctxt -> put ctxt#merge 
+
+  method eval_trace trace =
+    let is_code  = Bap_value.is Event.code_exec in
+    let code_exn = Bap_value.get_exn Event.code_exec in      
+    let rec loop point evs =
+      match Seq.next evs with
+      | None -> do_nothing ()
+      | Some (ev, evs) ->
+        if is_code ev then
+          let next_point = Some ({code = code_exn ev; side = [];}) in
+          match point with 
+          | None -> loop next_point evs
+          | Some point ->           
+            self#step point >>= fun () -> loop next_point evs
+        else
+          match point with
+          | None -> loop None evs
+          | Some point -> 
+            let next_point = {point with side = ev :: point.side} in
+            loop (Some next_point) evs in
+    loop None (Trace.events trace)
+
+end

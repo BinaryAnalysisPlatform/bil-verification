@@ -1,4 +1,4 @@
-open Bap.Std
+open Core_kernel.Std
 
 (**  Report module.
 
@@ -12,13 +12,14 @@ open Bap.Std
 *)
 
 type histo = (string * int) list [@@deriving bin_io, sexp]
+
 type succ = [ 
   | `Right 
   | `Undef 
   | `Wrong of string 
 ]
 
-type t [@@deriving bin_io, sexp]
+type t [@@deriving bin_io]
 
 val create: unit -> t
 val histo: t -> histo
