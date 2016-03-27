@@ -1,0 +1,27 @@
+OASISFormat:  0.4
+Name:         bil-veri
+Version:      0.2
+Synopsis:     Bil Verification tool
+Authors:      BAP Team
+Maintainers:  Ivan Gotovchits <ivg@ieee.org>,
+              Oleg Kamenkov <forown@yandex.ru>
+License:      MIT
+Copyrights:   (C) 2016 Carnegie Mellon University
+Plugins:      META (0.4), DevFiles (0.4)
+BuildTools:   ocamlbuild
+BuildDepends: core_kernel
+
+Library veri
+  Path: lib
+  FindLibName: bap-veri
+  Modules: Veri, Veri_helpers, Veri_report, Veri_traci
+  CompiledObject: best
+  BuildDepends: bap, bap-traces
+
+Executable veri_main
+  Path: src
+  MainIs: veri_main.ml
+  CompiledObject: best
+  BuildDepends: findlib.dynload, bap, bap.plugins,
+                bap-veri, bap-traces, cmdliner
+
