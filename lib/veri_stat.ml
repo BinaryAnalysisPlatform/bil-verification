@@ -67,14 +67,11 @@ let mislifted_names t =
 let print_table fmt info data = 
   let open Textutils.Std in
   let open Ascii_table in
-  let make_col name f = Column.create name f in
   let cols = 
-    List.fold ~f:(fun acc (name, f) -> make_col name f :: acc) ~init:[] info |> 
-    List.rev in
-  let stringify display =
-    Printf.sprintf "%s\n%!"
-      (to_string ~bars:`Ascii ~display cols data) in
-  Format.fprintf fmt "%s" (stringify Display.short_box)
+    List.fold ~f:(fun acc (name, f) -> 
+        (Column.create name f)::acc) ~init:[] info |> List.rev in
+  Format.fprintf fmt "%s"
+    (to_string ~bars:`Ascii ~display:Display.short_box cols data)
 
 module R = Regular.Make(struct
     type nonrec t = t [@@deriving bin_io, compare, sexp]
@@ -86,20 +83,38 @@ module R = Regular.Make(struct
     let pp_misexecuted fmt = function
       | [] -> ()
       | mis -> 
+        Format.fprintf fmt "misexecuted \n";
         print_table fmt 
           [ "instruction", fst;
             "failed", (fun (_, (_,er)) -> Printf.sprintf "%d" er);
             "successful", (fun (_, (ok,_)) -> Printf.sprintf "%d" ok); ] 
           mis
 
-    let pp_name fmt name = Format.fprintf fmt "%s @," name
-    let pp_names fmt names = List.iter ~f:(pp_name fmt) names
-
-    let pp_mislifted fmt = function 
+    let pp_mislifted fmt names = 
+      let open Textutils.Std in
+      let open Ascii_table in
+      let max_row_len = 20 in
+      let max_col_cnt = 5 in
+      match names with 
       | [] -> ()
+      | names when List.length names <= max_row_len ->
+        let names' = "mis-lifted: " :: names in
+        List.iter ~f:(Format.fprintf fmt "%s ") names';
+        Format.print_newline ()
       | names ->
-        let names' = "mis-lifted:" :: names in
-        Format.fprintf fmt "@[<b>%a@]" pp_names names'
+        let rows, last, _ = List.fold ~init:([], [], 0)
+            ~f:(fun (acc, row, i) name ->
+                if i < max_col_cnt then acc, name :: row, i + 1
+                else row :: acc, name :: [], 1) names in
+        let last = last @ Array.to_list 
+                    (Array.create ~len:(max_col_cnt - List.length last) "---" ) in
+        let rows = List.rev (last :: rows) in
+        let make_col i = 
+          Column.create "mislifted" (fun row -> List.nth_exn row i) in
+        let cols = [
+          make_col 0; make_col 1; make_col 2; make_col 3; make_col 4] in
+        to_string ~bars:`Ascii ~display:Display.short_box cols rows |>
+        Format.fprintf fmt "%s" 
         
     let pp fmt t = 
       let misexec = 
