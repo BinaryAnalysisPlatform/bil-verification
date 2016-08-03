@@ -93,12 +93,12 @@ module R = Regular.Make(struct
     let pp_mislifted fmt names = 
       let open Textutils.Std in
       let open Ascii_table in
-      let max_row_len = 20 in
+      let max_row_len = 10 in
       let max_col_cnt = 5 in
       match names with 
       | [] -> ()
       | names when List.length names <= max_row_len ->
-        let names' = "mis-lifted: " :: names in
+        let names' = "mislifted:" :: names in
         List.iter ~f:(Format.fprintf fmt "%s ") names';
         Format.print_newline ()
       | names ->
