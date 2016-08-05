@@ -75,7 +75,7 @@ module Program (O : Opts) = struct
   
   let is_interesting ev = not (Value.is Event.context_switch ev)
   
-  let eval_file file stat policy  = 
+  let eval_file file policy  = 
     let mk_er s = Error (Error.of_string s) in
     let uri = Uri.of_string ("file:" ^ file) in
     match Trace.load uri with
@@ -87,16 +87,13 @@ module Program (O : Opts) = struct
       | None -> mk_er "trace of unknown arch"
       | Some arch ->
         Dis.with_disasm ~backend:"llvm" (Arch.to_string arch) ~f:(fun dis ->
-            let dis = Dis.store_asm dis |> Dis.store_kinds in          
+            let dis = Dis.store_asm dis |> Dis.store_kinds in
+            let stat = Veri_stat.create () in
             let ctxt = new Veri.context stat policy trace in
             let veri = new Veri.t arch dis is_interesting in
             if options.show_errs then errors_stream ctxt#reports;
             let ctxt' = Monad.State.exec (veri#eval_trace trace) ctxt in
             Ok ctxt'#stat)
-
-  let print_summary stat =
-    let s = Veri_stat.make_summary stat in
-    Format.(fprintf std_formatter "%a\n" Veri_stat.Summary.pp s) 
 
   let read_dir path = 
     let dir = Unix.opendir path in
@@ -116,33 +113,40 @@ module Program (O : Opts) = struct
     Unix.closedir dir;
     files
 
+  let print_summary stat =
+    let s = Veri_stat.Summary.(add empty options.path stat) in
+    Format.(fprintf std_formatter "%a\n" Veri_stat.Summary.pp s)
+
   let main () =   
     let files = 
       if Sys.is_directory options.path then (read_dir options.path)
       else [options.path] in
     let policy = make_policy options.rules in
-    let eval stat file = 
+    let eval sum file = 
       Format.(fprintf std_formatter "%s@." file);
-      match eval_file file stat policy with
+      match eval_file file policy with
       | Error er -> 
         Error.to_string_hum er |>
         Printf.eprintf "error in verification: %s";
-        stat
-      | Ok stat' -> stat' in
-    let stat = List.fold ~init:(Veri_stat.create ()) ~f:eval files in
-    if options.show_stat then Veri_stat.pp Format.std_formatter stat;
-    print_summary stat
+        sum
+      | Ok stat' -> Veri_stat.Summary.add sum file stat' in
+    let sum = Veri_stat.Summary.empty in
+    let sum' = List.fold ~init:sum ~f:eval files in
+    if options.show_stat then
+      Veri_stat.Summary.pp_stat Format.std_formatter sum';
+    Format.(fprintf std_formatter "%a\n" Veri_stat.Summary.pp sum');
+    Veri_out.output sum' "my_file" (** TODO: replace it with commandline option*)
 
 end
 
 module Command = struct
 
   open Cmdliner
-      
+
   let filename = 
     let doc = 
       "Input file with extension .frames of directory with .frames files" in 
-    Arg.(required & pos 0 (some string) None & info [] ~doc ~docv:"FILE | DIR") 
+    Arg.(required & pos 0 (some string) None & info [] ~doc ~docv:"FILE | DIR")
       
   let rules, rules' =
     let name = "rules" in

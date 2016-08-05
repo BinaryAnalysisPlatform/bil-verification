@@ -28,7 +28,7 @@ Library veri_test
   Modules:        Veri_test
   BuildDepends:   bap, bap-traces, bap-veri, oUnit
 
-Executable veri_main
+Executable "bil-veri"
   Path:           src
   MainIs:         veri_main.ml
   CompiledObject: best

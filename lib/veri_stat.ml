@@ -1,23 +1,20 @@
 open Core_kernel.Std
 open Regular.Std
 
-module Names = String.Map
+module Calls = String.Map
 
 type ok_er = int * int [@@deriving bin_io, compare, sexp]
 
 type t = {
-  calls : ok_er Names.t;
+  calls : ok_er Calls.t;
   errors: Veri_error.t list;
 } [@@deriving bin_io, compare, sexp]
 
-let create () = { calls = Names.empty; errors = []; }
+type stat = t [@@deriving bin_io, compare, sexp]
+
+let create () = { calls = Calls.empty; errors = []; }
 let errors t = t.errors
 let notify t er = {t with errors = er :: t.errors }
-let errors_count t ~f = List.count t.errors ~f
-
-let entries_count t = 
-  List.length t.errors + 
-  Map.fold ~f:(fun ~key ~data cnt -> cnt + fst data + snd data) ~init:0 t.calls
 
 let update t name ~ok ~er = 
   {t with 
@@ -30,39 +27,96 @@ let update t name ~ok ~er =
 let failbil t name = update t name ~ok:0 ~er:1
 let success t name = update t name ~ok:1 ~er:0
 
-let successed_count {calls} =
-  Map.fold ~f:(fun ~key ~data cnt -> cnt + fst data) ~init:0 calls
+let merge s s' = 
+  let errors = s.errors @ s'.errors in
+  let calls = Map.fold ~init:s.calls s'.calls
+      ~f:(fun ~key ~data calls ->
+          Map.change calls key ~f:(function
+              | None -> Some data
+              | Some (ok,er) -> Some (fst data + ok, snd data + er))) in
+  {errors; calls}
 
-let misexecuted_count {calls} =
-  Map.fold ~f:(fun ~key ~data cnt -> cnt + snd data) ~init:0 calls
+module Abs = struct
 
-let overloaded_count t = errors_count t 
-    ~f:(function 
-        | `Overloaded_chunk -> true 
-        | _ -> false)
+  type nonrec t = t -> int
 
-let damaged_count t = errors_count t 
-    ~f:(function 
-        | `Damaged_chunk _ -> true 
-        | _ -> false)
+  let successed {calls} =
+    Map.fold ~f:(fun ~key ~data cnt -> cnt + fst data) ~init:0 calls
 
-let undisasmed_count t = errors_count t 
-    ~f:(function 
-        | `Disasm_error _ -> true 
-        | _ -> false)
+  let abs_successed {calls} =
+    Map.fold ~f:(fun ~key ~data cnt -> 
+        if snd data <> 0 then cnt
+        else cnt + fst data) ~init:0 calls
 
-let mislifted_count t = errors_count t 
-    ~f:(function 
-        | `Lifter_error _ -> true 
-        | _ -> false)
+  let misexecuted {calls} =
+    Map.fold ~f:(fun ~key ~data cnt -> cnt + snd data) ~init:0 calls
 
-let mislifted_names t = 
-  List.fold_left ~init:String.Set.empty 
-    ~f:(fun names errs ->
-        match errs with 
-        | `Lifter_error (insn,_) -> Set.add names insn
-        | _ -> names) t.errors |>
-  Set.to_list
+  let abs_misexecuted {calls} =
+    Map.fold ~f:(fun ~key ~data cnt -> 
+        if fst data <> 0 then cnt 
+        else cnt + snd data) ~init:0 calls
+
+  let errors_count t = 
+    let rec loop ((ovr, dmg, undis, misl) as acc) = function
+      | [] -> acc
+      | hd :: tl -> match hd with 
+        | `Overloaded_chunk -> loop (ovr + 1, dmg, undis, misl) tl
+        | `Damaged_chunk  _ -> loop (ovr, dmg + 1, undis, misl) tl
+        | `Disasm_error   _ -> loop (ovr, dmg, undis + 1, misl) tl
+        | `Lifter_error   _ -> loop (ovr, dmg, undis, misl + 1) tl in
+    loop (0,0,0,0) t.errors
+
+  let overloaded t = let x,_,_,_ = errors_count t in x
+  let damaged    t = let _,x,_,_ = errors_count t in x
+  let undisasmed t = let _,_,x,_ = errors_count t in x
+  let mislifted  t = let _,_,_,x = errors_count t in x
+
+  let total t = 
+    List.length t.errors + 
+    Map.fold ~f:(fun ~key ~data cnt -> cnt + fst data + snd data) ~init:0 t.calls
+
+end
+
+
+module Rel = struct
+  type t = stat -> float
+  
+  let total = Abs.total
+  let to_percent f t = float (f t) /. float (total t) *. 100.0
+  let successed       = to_percent Abs.successed
+  let abs_successed   = to_percent Abs.abs_successed
+  let misexecuted     = to_percent Abs.misexecuted
+  let abs_misexecuted = to_percent Abs.abs_misexecuted
+  let overloaded      = to_percent Abs.overloaded
+  let damaged         = to_percent Abs.damaged
+  let undisasmed      = to_percent Abs.undisasmed
+  let mislifted       = to_percent Abs.mislifted
+end
+
+module Names = struct
+
+  type nonrec t = t -> string list
+
+  let fold_calls ~condition t =
+    Map.fold ~f:(fun ~key ~data names -> 
+        if condition data then Set.add names key
+        else names) ~init:String.Set.empty t.calls |>
+    Set.to_list
+
+  let successed = fold_calls ~condition:(fun data -> fst data <> 0)
+  let abs_successed = fold_calls ~condition:(fun data -> snd data = 0)
+  let misexecuted = fold_calls ~condition:(fun data -> snd data <> 0)
+  let abs_misexecuted = fold_calls ~condition:(fun data -> fst data = 0)
+
+  let mislifted t = 
+    List.fold_left ~init:String.Set.empty 
+      ~f:(fun names errs ->
+          match errs with 
+          | `Lifter_error (insn,_) -> Set.add names insn
+          | _ -> names) t.errors |>
+    Set.to_list
+
+end
 
 let print_table fmt info data = 
   let open Textutils.Std in
@@ -107,7 +161,7 @@ module R = Regular.Make(struct
                 if i < max_col_cnt then acc, name :: row, i + 1
                 else row :: acc, name :: [], 1) names in
         let last = last @ Array.to_list 
-                    (Array.create ~len:(max_col_cnt - List.length last) "---" ) in
+                 (Array.create ~len:(max_col_cnt - List.length last) "---" ) in
         let rows = List.rev (last :: rows) in
         let make_col i = 
           Column.create "mislifted" (fun row -> List.nth_exn row i) in
@@ -119,32 +173,50 @@ module R = Regular.Make(struct
     let pp fmt t = 
       let misexec = 
         List.filter ~f:(fun (_,(_,er)) -> er <> 0) (Map.to_alist t.calls) in
-      let mislift = mislifted_names t in
+      let mislift = Names.mislifted t in
       Format.fprintf fmt "%a\n%a\n"
         pp_misexecuted misexec pp_mislifted mislift
   end)
 
 module Summary = struct
 
-  (** what, relative count, absolute count *)
-  type p = string * float * int [@@deriving bin_io, sexp, compare]
-  type t = p list [@@deriving bin_io, sexp, compare]
+  type t = {
+    stats : stat String.Map.t;
+    full  : stat;
+  } [@@deriving bin_io, compare, sexp]
 
+  type p = {
+    name: string;
+    rel : float;
+    abs : int;
+  } [@@deriving bin_io, sexp, compare]
+
+  let empty  = { stats = String.Map.empty; full = create () }
+  let add t name stat = 
+    let stats = Map.add t.stats ~key:name ~data:stat in
+    let full = merge t.full stat in
+    { stats; full; }
+
+  let stats t = Map.to_alist t.stats
+  let full t = t.full
   let to_percent n d  = float n /. float d *. 100.0      
+  let pp_stat fmt t = R.pp fmt t.full
 
   let make_p stat name f = 
-    let nom, denom = f stat, entries_count stat in
-    name, to_percent nom denom, nom
-
-  let create stat =
-    if entries_count stat = 0 then []
+    let nom, denom = f stat, Abs.total stat in
+    {name; rel = to_percent nom denom; abs = nom;}
+ 
+  let of_stats {full} =
+    let make name abs rel = {name; abs; rel;} in
+    if Abs.total full = 0 then []
     else
-      [ make_p stat "overloaded" overloaded_count;
-        make_p stat "undisasmed" undisasmed_count;
-        make_p stat "misexecuted" misexecuted_count;
-        make_p stat "mislifted" mislifted_count; 
-        make_p stat "damaged"  damaged_count;
-        make_p stat "successed" successed_count; ]
+      let s = full in
+      [ make "overloaded"  (Abs.overloaded s)  (Rel.overloaded s);
+        make "undisasmed"  (Abs.undisasmed s)  (Rel.undisasmed s);
+        make "misexecuted" (Abs.misexecuted s) (Rel.misexecuted s);
+        make "mislifted"   (Abs.mislifted s)   (Rel.mislifted s);
+        make "damaged"     (Abs.damaged s)     (Rel.damaged s);
+        make "successed"   (Abs.successed s)   (Rel.successed s);]
 
   include Regular.Make(struct
       type nonrec t = t [@@deriving bin_io, compare, sexp]
@@ -153,18 +225,17 @@ module Summary = struct
       let module_name = Some "Veri_stat.Summary"
       let version = "0.1"
 
-      let pp fmt = function
+      let pp fmt t = match of_stats t with
         | [] -> Format.fprintf fmt "summary is unavailable\n"
         | ps ->
           print_table fmt 
-            ["", (fun (x,_,_) -> x);
-             "rel", (fun (_,x,_) -> Printf.sprintf "%.2f%%" x);
-             "abs",  (fun (_,_,x) -> Printf.sprintf "%d" x);]
+            ["", (fun x -> x.name);
+             "rel", (fun x -> Printf.sprintf "%.2f%%" x.rel);
+             "abs",  (fun x -> Printf.sprintf "%d" x.abs);]
             ps
     end)
-
 end
 
-let make_summary stat = Summary.create stat
+type summary = Summary.t [@@deriving bin_io, sexp]
 
 include R
