@@ -40,21 +40,7 @@ module Abs = struct
 
   type nonrec t = t -> int
 
-  let successed {calls} =
-    Map.fold ~f:(fun ~key ~data cnt -> cnt + fst data) ~init:0 calls
-
-  let abs_successed {calls} =
-    Map.fold ~f:(fun ~key ~data cnt -> 
-        if snd data <> 0 then cnt
-        else cnt + fst data) ~init:0 calls
-
-  let misexecuted {calls} =
-    Map.fold ~f:(fun ~key ~data cnt -> cnt + snd data) ~init:0 calls
-
-  let abs_misexecuted {calls} =
-    Map.fold ~f:(fun ~key ~data cnt -> 
-        if fst data <> 0 then cnt 
-        else cnt + snd data) ~init:0 calls
+  let fold_calls {calls} f = Map.fold ~f ~init:0 calls
 
   let errors_count t = 
     let rec loop ((ovr, dmg, undis, misl) as acc) = function
@@ -66,23 +52,34 @@ module Abs = struct
         | `Lifter_error   _ -> loop (ovr, dmg, undis, misl + 1) tl in
     loop (0,0,0,0) t.errors
 
-  let overloaded t = let x,_,_,_ = errors_count t in x
-  let damaged    t = let _,x,_,_ = errors_count t in x
-  let undisasmed t = let _,_,x,_ = errors_count t in x
-  let mislifted  t = let _,_,_,x = errors_count t in x
+  let overloaded  t = let x,_,_,_ = errors_count t in x
+  let damaged     t = let _,x,_,_ = errors_count t in x
+  let undisasmed  t = let _,_,x,_ = errors_count t in x
+  let mislifted   t = let _,_,_,x = errors_count t in x
+  let successed   t = fold_calls t (fun ~key ~data cnt -> cnt + fst data)
+  let misexecuted t = fold_calls t (fun ~key ~data cnt -> cnt + snd data)
+
+  let abs_successed t = 
+    fold_calls t (fun ~key ~data cnt ->
+        if snd data <> 0 then cnt
+        else cnt + fst data)
+      
+  let abs_misexecuted t = 
+    fold_calls t (fun ~key ~data cnt ->   
+      if fst data <> 0 then cnt 
+      else cnt + snd data)
 
   let total t = 
     List.length t.errors + 
-    Map.fold ~f:(fun ~key ~data cnt -> cnt + fst data + snd data) ~init:0 t.calls
+    fold_calls t (fun ~key ~data cnt -> cnt + fst data + snd data)
 
 end
 
 
 module Rel = struct
-  type t = stat -> float
-  
+  type t = stat -> float  
   let total = Abs.total
-  let to_percent f t = float (f t) /. float (total t) *. 100.0
+  let to_percent f t  = float (f t) /. float (total t) *. 100.0
   let successed       = to_percent Abs.successed
   let abs_successed   = to_percent Abs.abs_successed
   let misexecuted     = to_percent Abs.misexecuted
@@ -115,7 +112,6 @@ module Names = struct
           | `Lifter_error (insn,_) -> Set.add names insn
           | _ -> names) t.errors |>
     Set.to_list
-
 end
 
 let print_table fmt info data = 
@@ -199,13 +195,7 @@ module Summary = struct
 
   let stats t = Map.to_alist t.stats
   let full t = t.full
-  let to_percent n d  = float n /. float d *. 100.0      
-  let pp_stat fmt t = R.pp fmt t.full
 
-  let make_p stat name f = 
-    let nom, denom = f stat, Abs.total stat in
-    {name; rel = to_percent nom denom; abs = nom;}
- 
   let of_stats {full} =
     let make name abs rel = {name; abs; rel;} in
     if Abs.total full = 0 then []

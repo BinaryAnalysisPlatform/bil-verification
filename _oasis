@@ -14,7 +14,7 @@ BuildDepends: ppx_jane, core_kernel, pcre
 Library veri
   Path:           lib
   FindLibName:    bap-veri
-  Modules:        Veri, Veri_error, Veri_stat, Veri_traci, Veri_policy
+  Modules:        Veri, Veri_error, Veri_policy, Veri_report, Veri_stat, Veri_traci 
   CompiledObject: best
   Install:        false
   NativeOpt:      -pp 'ppx-jane -dump-ast'

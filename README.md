@@ -7,6 +7,13 @@ set of events. First one is a real events set, that came from trace. And second
 one is a set, that was filled during execution of `code_exec` event, by 
 emitting artificial events.
 
+##Build and install
+```
+oasis setup
+./configure --prefix=`opam config var prefix`
+make
+make install
+```
 ##Policy
 
 There is an ideal case when all events from trace and all events from
@@ -40,7 +47,7 @@ either commented with `#` symbol, either empty. Rule must have exactly
 must be written in quotes: `"RAX => .*"`, single quotes also supported:
 `'RAX => .*'`.
 
-###Examles
+###Examples
 
 For example, let's imagine that a tracer doesn't support read from zero 
 flag, so all read events from zero flag in bil code will be unmatched. 
@@ -69,11 +76,11 @@ Backreferenses example: `DENY .* '(.F) <= .*' '\1 <= .*'`, that could be read
 as: for any instruction complain if a value written in some flag in tracer is 
 differrent from value written in lifter for the same flag. And values are 
 really different, since only not equal events goes to matching.
-      
+
 ##Usage
 Program works only with files with `.frames` extension.
 ```
-./veri_main.native --show-errors --show-stat --rules "path to rules file" PATH
+bil-veri --show-errors --show-stat --rules "path to rules file" PATH
 
 `PATH` is either directory with files from a tracer, either a file.
 `show-errors` option allows to see a detailed information about BIL errors

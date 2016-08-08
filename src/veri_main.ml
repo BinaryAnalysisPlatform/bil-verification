@@ -19,7 +19,8 @@ module Veri_options = struct
     rules : string option;
     show_errs : bool;
     show_stat : bool;
-    path : string;
+    path  : string;
+    out   : string option;
   } [@@deriving fields]
 end
 
@@ -30,6 +31,8 @@ end
 module Program (O : Opts) = struct
   open Veri_options
   open O
+
+  module Sum = Veri_stat.Summary
 
   let read_rules fname = 
     let comments = "#" in
@@ -69,7 +72,7 @@ module Program (O : Opts) = struct
 
   let errors_stream s = 
     let pp_result fmt report  = 
-      Format.fprintf fmt "%a" Veri.Report.pp report;
+      Format.fprintf fmt "%a" Veri_report.pp report;
       Format.print_flush () in
     ignore(Stream.subscribe s (pp_result Format.std_formatter))
   
@@ -113,10 +116,6 @@ module Program (O : Opts) = struct
     Unix.closedir dir;
     files
 
-  let print_summary stat =
-    let s = Veri_stat.Summary.(add empty options.path stat) in
-    Format.(fprintf std_formatter "%a\n" Veri_stat.Summary.pp s)
-
   let main () =   
     let files = 
       if Sys.is_directory options.path then (read_dir options.path)
@@ -129,14 +128,14 @@ module Program (O : Opts) = struct
         Error.to_string_hum er |>
         Printf.eprintf "error in verification: %s";
         sum
-      | Ok stat' -> Veri_stat.Summary.add sum file stat' in
-    let sum = Veri_stat.Summary.empty in
-    let sum' = List.fold ~init:sum ~f:eval files in
+      | Ok stat' -> Sum.add sum (Filename.basename file) stat' in
+    let sum = List.fold ~init:Sum.empty ~f:eval files in
     if options.show_stat then
-      Veri_stat.Summary.pp_stat Format.std_formatter sum';
-    Format.(fprintf std_formatter "%a\n" Veri_stat.Summary.pp sum');
-    Veri_out.output sum' "my_file" (** TODO: replace it with commandline option*)
-
+      Veri_stat.pp Format.std_formatter (Sum.full sum);
+    Format.(fprintf std_formatter "%a\n" Sum.pp sum);
+    match options.out with
+    | None -> ()
+    | Some out -> Veri_out.output sum out
 end
 
 module Command = struct
@@ -147,6 +146,12 @@ module Command = struct
     let doc = 
       "Input file with extension .frames of directory with .frames files" in 
     Arg.(required & pos 0 (some string) None & info [] ~doc ~docv:"FILE | DIR")
+
+  let output, output' =
+    let name = "output" in
+    let doc = "File to outpit resultsx" in
+    Arg.(value & opt (some string) None & info [name] ~docv:"FILE" ~doc),
+    name
       
   let rules, rules' =
     let name = "rules" in
@@ -172,12 +177,13 @@ module Command = struct
     ] in
     Term.info "veri" ~doc ~man
 
-  let create a b c d = Veri_options.Fields.create a b c d 
+  let create a b c d e = Veri_options.Fields.create a b c d e 
 
-  let run_t = Term.(const create $ rules $ show_errors $ show_stat $ filename)
+  let run_t = 
+    Term.(const create $ rules $ show_errors $ show_stat $ filename $ output)
 
   let filter_argv argv = 
-    let ours = [ rules'; show_errors'; show_stat'; ] in
+    let ours = [ rules'; show_errors'; show_stat'; output'] in
     let prefix = "--" in
     let is_our arg =      
       if String.is_prefix arg ~prefix then

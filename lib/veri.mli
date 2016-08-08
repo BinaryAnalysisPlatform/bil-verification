@@ -10,17 +10,6 @@ module Disasm : sig
   type t = (asm, kinds) Dis.t
 end
 
-module Report : sig
-  type t [@@deriving bin_io, sexp]
-  include Regular with type t := t
-  val bil  : t -> bil
-  val code : t -> string
-  val insn : t -> string
-  val left : t -> Trace.event list
-  val right: t -> Trace.event list
-  val data : t -> (Veri_policy.rule * Veri_policy.matched) list
-end
-
 class context: Veri_stat.t -> Veri_policy.t -> Trace.t -> object('s)
     inherit Veri_traci.context
     method split : 's
@@ -31,7 +20,7 @@ class context: Veri_stat.t -> Veri_policy.t -> Trace.t -> object('s)
     method stat : Veri_stat.t
     method code : Chunk.t option
     method events : Value.Set.t
-    method reports : Report.t stream
+    method reports : Veri_report.t stream
     method register_event : Trace.event -> 's
     method discard_event : (Trace.event -> bool) -> 's
     method notify_error: Veri_error.t -> 's

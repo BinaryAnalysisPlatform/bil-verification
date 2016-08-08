@@ -81,7 +81,7 @@ let check_left_diff pref trace expected =
     | None ->
       assert_false (Printf.sprintf "%s: no left match" pref)
     | Some r ->
-      match Veri.Report.data r with 
+      match Veri_report.data r with 
       | [] -> assert_false (Printf.sprintf "%s: no left match" pref)
       | (rule,(left,_))::_ ->        
         let s = Printf.sprintf "%s: diff equality check" pref in
