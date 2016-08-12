@@ -14,7 +14,13 @@ BuildDepends: ppx_jane, core_kernel, pcre
 Library veri
   Path:           lib
   FindLibName:    bap-veri
-  Modules:        Veri, Veri_error, Veri_policy, Veri_report, Veri_stat, Veri_traci 
+  Modules:        Veri,
+                  Veri_error,
+                  Veri_policy,
+                  Veri_report,
+                  Veri_rule,
+                  Veri_stat,
+                  Veri_traci
   CompiledObject: best
   Install:        false
   NativeOpt:      -pp 'ppx-jane -dump-ast'
@@ -23,9 +29,10 @@ Library veri
 
 Library veri_test
   Path:           tests
+  Build$:         flag(tests)
   Install:        false
   CompiledObject: best
-  Modules:        Veri_test
+  Modules:        Veri_test, Veri_stat_test
   BuildDepends:   bap, bap-traces, bap-veri, oUnit
 
 Executable "bil-veri"
@@ -41,8 +48,8 @@ Executable run_tests
   MainIs:         run_tests.ml
   Install:        false
   Build$:         flag(tests)
-  BuildDepends:   bap, bap-traces, bap.plugins, veri_test, oUnit, findlib.dynload
   CompiledObject: best
+  BuildDepends:   bap, bap-traces, bap.plugins, veri_test, oUnit, findlib.dynload
 
 Test veri_test
   TestTools:      run_tests

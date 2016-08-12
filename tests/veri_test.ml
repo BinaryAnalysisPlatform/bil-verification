@@ -83,7 +83,7 @@ let check_left_diff pref trace expected =
     | Some r ->
       match Veri_report.data r with 
       | [] -> assert_false (Printf.sprintf "%s: no left match" pref)
-      | (rule,(left,_))::_ ->        
+      | (rule,(left,_))::_ ->       
         let s = Printf.sprintf "%s: diff equality check" pref in
         assert_bool s (is_equal_events expected left)
 
@@ -98,7 +98,7 @@ let test_reg ctxt =
   let e5 = make_event pc_update (word_of_int 0xF67DE0D2) in
   let real_evs = [e0;e1;e2;e3;e4;e5;] in
   let trace = make_trace code real_evs in
-  let expected_diff = [e0; e1; e4; e5] in
+  let expected_diff = [e0; e1; e4;] in
   check_left_diff "test_reg" trace expected_diff
       
 (** MOV32mr: 
@@ -116,7 +116,7 @@ let test_mem_store ctxt =
   let e5 = make_event pc_update (word_of_int 0xF67E17D7) in
   let real_events = [e0;e1;e2;e3;e4;e5;] in
   let trace = make_trace code real_events in
-  let expected_diff = [e0; e4; e5] in
+  let expected_diff = [e0; e4;] in
   check_left_diff "test_mem_store" trace expected_diff
 
 (** MOV32rm : { EBX := mem32[low:32[ESP], el]:u32 }*)
@@ -130,7 +130,7 @@ let test_mem_load ctxt =
   let e5 = make_event pc_update (word_of_int 0xF67F57AB) in
   let real_evs = [e0;e1;e2;e3;e4;e5;] in
   let trace = make_trace code real_evs in
-  let expected_diff = [e0; e4; e5] in  
+  let expected_diff = [e0; e4;] in  
   check_left_diff "test_mem_load" trace expected_diff
 
 let test_backref_match ctxt = 
