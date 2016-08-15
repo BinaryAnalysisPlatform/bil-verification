@@ -132,11 +132,8 @@ let match_both rule left right =
   | [], [] -> None
   | ms -> Some ms
 
-let is_sat_insn rule name = 
-  not (Rule.(is_empty (insn rule))) && Rule.match_field rule `Insn name
-
 let match_events rule insn events events' =
-  match is_sat_insn rule insn with
+  match Rule.match_field rule `Insn insn with
   | false -> None
   | true -> 
     let left = Set.diff events events' in

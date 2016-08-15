@@ -29,14 +29,15 @@ let flag' = make_flag "CF" false
 let test_denied ctxt =
   let left  = Events.of_list [make_flag "OF" true; flag; make_flag "SF" true] in
   let right = Events.of_list [make_flag "OF" true; flag'] in
-  let res = Policy.denied policy "some insn" left right in
-  assert_equal ~ctxt (List.length res) 1;
-  let (rule, (left', right')) = List.hd_exn res in 
-  assert_equal ~ctxt ~cmp:Rule.equal rule rule_with_deny;
-  assert_equal ~ctxt [flag] left';
-  assert_equal ~ctxt [flag'] right'
+  match Policy.denied policy "some insn" left right with
+  | [] -> assert_failure "match result is empty"
+  | (rule, (left', right')) :: [] ->
+    assert_equal ~ctxt ~cmp:Rule.equal rule rule_with_deny;
+    assert_equal ~ctxt [flag] left';
+    assert_equal ~ctxt [flag'] right'
+  | res -> assert_failure "match result is unexpectable long"
 
 let suite () =
   "Veri rule test" >::: [ 
-    "denied" >:: test_denied 
+    "denied"  >:: test_denied;
   ]

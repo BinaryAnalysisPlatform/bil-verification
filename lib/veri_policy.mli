@@ -17,6 +17,8 @@ type t [@@deriving bin_io, compare, sexp]
 
 val empty : t
 val add : t -> rule -> t
+
+(** [match events rule insn left right] *)
 val match_events: rule -> string -> events -> events -> matched option
 
 (** [denied policy insn left right] *)
