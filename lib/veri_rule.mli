@@ -19,7 +19,7 @@ val create :
 exception Bad_field of string
 
 (** [create_exn ~insn ~left ~right action] - the same as above, but raises
-    Bad_field exception if fields contains errors *)
+    Bad_field exception if fields contains errors in regular expressions *)
 val create_exn : ?insn:string -> ?left:string -> ?right:string -> action -> t
 
 (** [of_string_err str] - return a rule, if string contains exactly 4 fields:

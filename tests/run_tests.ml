@@ -12,6 +12,8 @@ let load_plugins () =
 let suite () =
   "Bap-veri" >::: [ 
     Veri_test.suite ();
+    Veri_policy_test.suite ();
+    Veri_rule_test.suite ();
     Veri_stat_test.suite ();
   ]
 

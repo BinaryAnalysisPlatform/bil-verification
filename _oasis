@@ -32,7 +32,7 @@ Library veri_test
   Build$:         flag(tests)
   Install:        false
   CompiledObject: best
-  Modules:        Veri_test, Veri_stat_test
+  Modules:        Veri_test, Veri_policy_test, Veri_rule_test, Veri_stat_test
   BuildDepends:   bap, bap-traces, bap-veri, oUnit
 
 Executable "bil-veri"

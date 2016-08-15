@@ -133,31 +133,11 @@ let test_mem_load ctxt =
   let expected_diff = [e0; e4;] in  
   check_left_diff "test_mem_load" trace expected_diff
 
-let test_backref_match ctxt = 
-  let open Veri_policy in
-  let rule = ok_exn
-    (Veri_rule.create 
-      ~insn:" *" 
-      ~left:"(.*) => 0x282:32" 
-      ~right:"(\\1) => (.*)" Veri_rule.skip) in
-  let e0 = make_event register_read (make_reg "EFLAGS" 0x282) in
-  let e0' = make_event register_read (make_reg "EFLAGS" 0x283) in
-  let e1 = make_event memory_load (make_mem 0xF6FFEDDC 0xF67E17CE) in
-  let e2 = make_event register_write (make_reg "EBX" 0xF67E17CE) in
-  let events = Value.Set.of_list [e0; e1; e2] in
-  let events' = Value.Set.of_list [e2; e1; e0'] in
-  match match_events rule "insn name" events events' with
-  | None -> assert_false "test back reference match empty"
-  | Some matched -> 
-    let expected = [e0], [e0'] in
-    assert_equal ~ctxt matched expected
-
 let suite () =
   "Veri test" >:::
   [
     "reg test"        >:: test_reg;
     "mem store test"  >:: test_mem_store;
     "mem load test"   >:: test_mem_load;
-    "test backref"    >:: test_backref_match;
   ]
   
