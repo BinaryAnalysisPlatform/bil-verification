@@ -48,7 +48,7 @@ let damaged_cnt = 16
 let undisasmed_cnt = 32
 
 let stat =
-  Stat.create () |>
+  Stat.empty |>
   repeat_overloaded overloaded_cnt |>
   repeat_damaged damaged_cnt       |>
   repeat_undisasmed undisasmed_cnt |>
@@ -76,7 +76,7 @@ let test_abs ctxt =
 
 let test_rel ctxt = 
   let assert_float descr x y = assert_bool descr (cmp_float x y) in
-  let to_float n = float n /. float (Abs.total stat) *. 100.0 in
+  let to_float n = float n /. float (Abs.total stat) in
   let to_float' xs = to_float (List.length xs) in
   assert_float "rel successed" 
     (Rel.successed stat) (to_float' (abs_successed_names @ successed_names));

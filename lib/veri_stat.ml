@@ -12,7 +12,7 @@ type t = {
 
 type stat = t [@@deriving bin_io, compare, sexp]
 
-let create () = { calls = Calls.empty; errors = []; }
+let empty = { calls = Calls.empty; errors = []; }
 let errors t = t.errors
 let notify t er = {t with errors = er :: t.errors }
 
@@ -26,15 +26,6 @@ let update t name ~ok ~er =
 
 let failbil t name = update t name ~ok:0 ~er:1
 let success t name = update t name ~ok:1 ~er:0
-
-let merge s s' = 
-  let errors = s.errors @ s'.errors in
-  let calls = Map.fold ~init:s.calls s'.calls
-      ~f:(fun ~key ~data calls ->
-          Map.change calls key ~f:(function
-              | None -> Some data
-              | Some (ok,er) -> Some (fst data + ok, snd data + er))) in
-  {errors; calls}
 
 module Abs = struct
 
@@ -75,19 +66,24 @@ module Abs = struct
 
 end
 
-
 module Rel = struct
-  type t = stat -> float  
-  let total = Abs.total
-  let to_percent f t  = float (f t) /. float (total t) *. 100.0
-  let successed       = to_percent Abs.successed
-  let abs_successed   = to_percent Abs.abs_successed
-  let misexecuted     = to_percent Abs.misexecuted
-  let abs_misexecuted = to_percent Abs.abs_misexecuted
-  let overloaded      = to_percent Abs.overloaded
-  let damaged         = to_percent Abs.damaged
-  let undisasmed      = to_percent Abs.undisasmed
-  let mislifted       = to_percent Abs.mislifted
+  type t = ?as_percents:bool -> stat -> float
+
+  let apply f b t  = 
+    let r = float (f t) /. float (Abs.total t) in
+    if b then r *. 100.0
+    else r
+
+  let ( @@ ) = apply
+
+  let successed       ?(as_percents=false) = Abs.successed @@ as_percents
+  let abs_successed   ?(as_percents=false) = Abs.abs_successed @@ as_percents
+  let misexecuted     ?(as_percents=false) = Abs.misexecuted @@ as_percents
+  let abs_misexecuted ?(as_percents=false) = Abs.abs_misexecuted @@ as_percents
+  let overloaded      ?(as_percents=false) = Abs.overloaded @@ as_percents
+  let damaged         ?(as_percents=false) = Abs.damaged @@ as_percents
+  let undisasmed      ?(as_percents=false) = Abs.undisasmed @@ as_percents
+  let mislifted       ?(as_percents=false) = Abs.mislifted @@ as_percents
 end
 
 module Names = struct
@@ -123,7 +119,53 @@ let print_table fmt info data =
   Format.fprintf fmt "%s"
     (to_string ~bars:`Ascii ~display:Display.short_box cols data)
 
-module R = Regular.Make(struct
+module Summary = struct
+
+  type nonrec t = t [@@deriving bin_io, compare, sexp]
+
+  type p = {
+    name: string;
+    rel : float;
+    abs : int;
+  } [@@deriving bin_io, sexp, compare]
+
+  let of_stat s =
+    let make name abs rel = {name; abs; rel;} in
+    if Abs.total s = 0 then []
+    else
+      let as_percents = true in
+      [ make "overloaded"  (Abs.overloaded s)  (Rel.overloaded ~as_percents s);
+        make "undisasmed"  (Abs.undisasmed s)  (Rel.undisasmed ~as_percents s);
+        make "misexecuted" (Abs.misexecuted s) (Rel.misexecuted ~as_percents s);
+        make "mislifted"   (Abs.mislifted s)   (Rel.mislifted ~as_percents s);
+        make "damaged"     (Abs.damaged s)     (Rel.damaged ~as_percents s);
+        make "successed"   (Abs.successed s)   (Rel.successed ~as_percents s);]
+
+  let pp fmt t = match of_stat t with
+    | [] -> Format.fprintf fmt "summary is unavailable\n"
+    | ps ->
+      print_table fmt 
+        ["", (fun x -> x.name);
+         "rel", (fun x -> Printf.sprintf "%.2f%%" x.rel);
+         "abs",  (fun x -> Printf.sprintf "%d" x.abs);]
+        ps
+
+end
+
+let merge ts =
+  let (+) s s' =
+    let errors = s.errors @ s'.errors in
+    let calls = Map.fold ~init:s.calls s'.calls
+        ~f:(fun ~key ~data calls ->
+            Map.change calls key ~f:(function
+                | None -> Some data
+                | Some (ok,er) -> Some (fst data + ok, snd data + er))) in
+    {errors; calls} in
+  List.fold ~f:(+) ~init:empty ts
+
+let pp_summary = Summary.pp
+
+include Regular.Make(struct
     type nonrec t = t [@@deriving bin_io, compare, sexp]
     let compare = compare
     let hash = Hashtbl.hash
@@ -141,8 +183,6 @@ module R = Regular.Make(struct
           mis
 
     let pp_mislifted fmt names = 
-      let open Textutils.Std in
-      let open Ascii_table in
       let max_row_len = 10 in
       let max_col_cnt = 5 in
       match names with 
@@ -152,80 +192,24 @@ module R = Regular.Make(struct
         List.iter ~f:(Format.fprintf fmt "%s ") names';
         Format.print_newline ()
       | names ->
-        let rows, last, _ = List.fold ~init:([], [], 0)
+        let rows, row, _ = List.fold ~init:([], [], 0)
             ~f:(fun (acc, row, i) name ->
                 if i < max_col_cnt then acc, name :: row, i + 1
                 else row :: acc, name :: [], 1) names in
-        let last = last @ Array.to_list 
-                 (Array.create ~len:(max_col_cnt - List.length last) "---" ) in
+        let gaps = Array.create ~len:(max_col_cnt - List.length row) "-----" in
+        let last = row @ Array.to_list gaps in
         let rows = List.rev (last :: rows) in
-        let make_col i = 
-          Column.create "mislifted" (fun row -> List.nth_exn row i) in
+        let make_col i = "mislifted", (fun row -> List.nth_exn row i) in
         let cols = [
-          make_col 0; make_col 1; make_col 2; make_col 3; make_col 4] in
-        to_string ~bars:`Ascii ~display:Display.short_box cols rows |>
-        Format.fprintf fmt "%s" 
-        
+          make_col 0; make_col 1; make_col 2; make_col 3; make_col 4; ] in
+        print_table fmt cols rows
+
     let pp fmt t = 
       let misexec = 
         List.filter ~f:(fun (_,(_,er)) -> er <> 0) (Map.to_alist t.calls) in
       let mislift = Names.mislifted t in
       Format.fprintf fmt "%a\n%a\n"
         pp_misexecuted misexec pp_mislifted mislift
+
   end)
 
-module Summary = struct
-
-  type t = {
-    stats : stat String.Map.t;
-    full  : stat;
-  } [@@deriving bin_io, compare, sexp]
-
-  type p = {
-    name: string;
-    rel : float;
-    abs : int;
-  } [@@deriving bin_io, sexp, compare]
-
-  let empty  = { stats = String.Map.empty; full = create () }
-  let add t name stat = 
-    let stats = Map.add t.stats ~key:name ~data:stat in
-    let full = merge t.full stat in
-    { stats; full; }
-
-  let stats t = Map.to_alist t.stats
-  let full t = t.full
-
-  let of_stats {full} =
-    let make name abs rel = {name; abs; rel;} in
-    if Abs.total full = 0 then []
-    else
-      let s = full in
-      [ make "overloaded"  (Abs.overloaded s)  (Rel.overloaded s);
-        make "undisasmed"  (Abs.undisasmed s)  (Rel.undisasmed s);
-        make "misexecuted" (Abs.misexecuted s) (Rel.misexecuted s);
-        make "mislifted"   (Abs.mislifted s)   (Rel.mislifted s);
-        make "damaged"     (Abs.damaged s)     (Rel.damaged s);
-        make "successed"   (Abs.successed s)   (Rel.successed s);]
-
-  include Regular.Make(struct
-      type nonrec t = t [@@deriving bin_io, compare, sexp]
-      let compare = compare
-      let hash = Hashtbl.hash
-      let module_name = Some "Veri_stat.Summary"
-      let version = "0.1"
-
-      let pp fmt t = match of_stats t with
-        | [] -> Format.fprintf fmt "summary is unavailable\n"
-        | ps ->
-          print_table fmt 
-            ["", (fun x -> x.name);
-             "rel", (fun x -> Printf.sprintf "%.2f%%" x.rel);
-             "abs",  (fun x -> Printf.sprintf "%d" x.abs);]
-            ps
-    end)
-end
-
-type summary = Summary.t [@@deriving bin_io, sexp]
-
-include R

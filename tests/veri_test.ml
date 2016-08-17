@@ -64,7 +64,7 @@ let test_policy =
 let eval_trace trace =
   Dis.with_disasm ~backend:"llvm" (Arch.to_string arch) ~f:(fun dis ->
       let dis = Dis.store_asm dis |> Dis.store_kinds in 
-      let stat = Veri_stat.create () in
+      let stat = Veri_stat.empty in
       let ctxt = new Veri.context stat test_policy trace in
       let veri = new Veri.t arch dis (fun _ -> true) in
       let hd = Stream.hd ctxt#reports in

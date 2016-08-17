@@ -9,7 +9,7 @@ License:      MIT
 Copyrights:   (C) 2016 Carnegie Mellon University
 Plugins:      META (0.4), DevFiles (0.4)
 BuildTools:   ocamlbuild
-BuildDepends: ppx_jane, core_kernel, pcre
+BuildDepends: ppx_jane, core_kernel, bap, bap-traces
 
 Library veri
   Path:           lib
@@ -25,23 +25,25 @@ Library veri
   Install:        false
   NativeOpt:      -pp 'ppx-jane -dump-ast'
   ByteOpt:        -pp 'ppx-jane -dump-ast'
-  BuildDepends:   bap, bap-traces, textutils, threads
+  BuildDepends:   pcre, textutils, threads
 
 Library veri_test
   Path:           tests
   Build$:         flag(tests)
   Install:        false
   CompiledObject: best
-  Modules:        Veri_test, Veri_policy_test, Veri_rule_test, Veri_stat_test
-  BuildDepends:   bap, bap-traces, bap-veri, oUnit
+  Modules:        Veri_test, 
+                  Veri_policy_test, 
+                  Veri_rule_test, 
+                  Veri_stat_test
+  BuildDepends:   bap-veri, oUnit
 
 Executable "bil-veri"
   Path:           src
   MainIs:         veri_main.ml
   CompiledObject: best
   Install:        true
-  BuildDepends:   findlib.dynload, bap, bap.plugins,
-                  bap-veri, bap-traces, cmdliner
+  BuildDepends:   findlib.dynload, bap.plugins, bap-veri, cmdliner
 
 Executable run_tests
   Path:           tests
@@ -49,7 +51,7 @@ Executable run_tests
   Install:        false
   Build$:         flag(tests)
   CompiledObject: best
-  BuildDepends:   bap, bap-traces, bap.plugins, veri_test, oUnit, findlib.dynload
+  BuildDepends:   bap.plugins, veri_test, oUnit, findlib.dynload
 
 Test veri_test
   TestTools:      run_tests

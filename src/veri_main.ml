@@ -32,8 +32,6 @@ module Program (O : Opts) = struct
   open Veri_options
   open O
 
-  module Sum = Veri_stat.Summary
-
   let read_rules fname = 
     let comments = "#" in
     let is_sensible s = 
@@ -91,7 +89,7 @@ module Program (O : Opts) = struct
       | Some arch ->
         Dis.with_disasm ~backend:"llvm" (Arch.to_string arch) ~f:(fun dis ->
             let dis = Dis.store_asm dis |> Dis.store_kinds in
-            let stat = Veri_stat.create () in
+            let stat = Veri_stat.empty in
             let ctxt = new Veri.context stat policy trace in
             let veri = new Veri.t arch dis is_interesting in
             if options.show_errs then errors_stream ctxt#reports;
@@ -121,21 +119,23 @@ module Program (O : Opts) = struct
       if Sys.is_directory options.path then (read_dir options.path)
       else [options.path] in
     let policy = make_policy options.rules in
-    let eval sum file = 
+    let eval stats file = 
       Format.(fprintf std_formatter "%s@." file);
       match eval_file file policy with
       | Error er -> 
         Error.to_string_hum er |>
         Printf.eprintf "error in verification: %s";
-        sum
-      | Ok stat' -> Sum.add sum (Filename.basename file) stat' in
-    let sum = List.fold ~init:Sum.empty ~f:eval files in
+        stats
+      | Ok stat' -> (Filename.basename file, stat') :: stats in
+    let stats = List.fold ~init:[] ~f:eval files in
+    let stat = Veri_stat.merge (List.map ~f:snd stats) in
     if options.show_stat then
-      Veri_stat.pp Format.std_formatter (Sum.full sum);
-    Format.(fprintf std_formatter "%a\n" Sum.pp sum);
+      Veri_stat.pp Format.std_formatter stat;
+    Format.(fprintf std_formatter "%a\n" Veri_stat.pp_summary stat);
     match options.out with
     | None -> ()
-    | Some out -> Veri_out.output sum out
+    | Some out -> Veri_out.output stats out
+
 end
 
 module Command = struct
@@ -149,7 +149,7 @@ module Command = struct
 
   let output, output' =
     let name = "output" in
-    let doc = "File to outpit resultsx" in
+    let doc = "File to output results" in
     Arg.(value & opt (some string) None & info [name] ~docv:"FILE" ~doc),
     name
       

@@ -2,12 +2,14 @@
 open Regular.Std
 type t [@@deriving bin_io, sexp]
 type stat = t [@@deriving bin_io, sexp]
-type summary  [@@deriving bin_io, sexp]
 
-val create : unit -> t
+val empty : t
+val merge : t list -> t
 val notify : t -> Veri_error.t -> t
 val failbil : t -> string -> t
 val success : t -> string -> t
+
+val pp_summary: Format.formatter -> t -> unit
 
 include Regular with type t := t
 
@@ -40,9 +42,9 @@ module Abs : sig
   val total           : t
 end
 
-(** in % of total count *)
+(** relative to total count *)
 module Rel : sig
-  type t = stat -> float
+  type t = ?as_percents:bool -> stat -> float
   val successed       : t
   val abs_successed   : t
   val misexecuted     : t
@@ -61,13 +63,4 @@ module Names : sig
   val misexecuted     : t
   val abs_misexecuted : t
   val mislifted       : t
-end
-
-module Summary : sig
-  type t = summary
-  val empty : t
-  val stats : t -> (string * stat) list
-  val full : t -> stat
-  val add : t -> string -> stat -> t
-  include Regular with type t := t
 end
