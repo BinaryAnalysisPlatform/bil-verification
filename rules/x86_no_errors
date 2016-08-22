@@ -6,6 +6,12 @@ SKIP SYSCALL.* '' ''
 SKIP CPUID '' ''
 SKIP XGETBV '' ''
 
+#this one doesn't perform any write operation in our lifter
+#SKIP FNSTCW16m '' ''
+
+#differences in ZF flag writing
+SKIP TZCNT64rr 'ZF <= .*' 'ZF <= .*'
+
 # SAR is suspected to be broken in our lifter, because of different 
 # results with tracer
 SKIP SAR.* '' ''

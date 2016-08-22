@@ -147,26 +147,21 @@ module Command = struct
       "Input file with extension .frames of directory with .frames files" in 
     Arg.(required & pos 0 (some string) None & info [] ~doc ~docv:"FILE | DIR")
 
-  let output, output' =
-    let name = "output" in
+  let output =
     let doc = "File to output results" in
-    Arg.(value & opt (some string) None & info [name] ~docv:"FILE" ~doc),
-    name
+    Arg.(value & opt (some string) None & info ["output"] ~docv:"FILE" ~doc)
       
-  let rules, rules' =
-    let name = "rules" in
+  let rules =
     let doc = "File with policy description" in
-    Arg.(value & opt (some non_dir_file) None & info [name] ~docv:"FILE" ~doc),
-    name
+    Arg.(value & opt (some non_dir_file) None & info ["rules"] ~docv:"FILE" ~doc)
 
-  let make_flag ~doc ~name = Arg.(value & flag & info [name] ~doc), name
+  let make_flag ~doc ~name = Arg.(value & flag & info [name] ~doc)
 
-  let show_errors, show_errors' = 
+  let show_errors = 
     make_flag ~name:"show-errors" 
       ~doc:"Show detailed information about BIL errors"
 
-  let show_stat, show_stat' =
-    make_flag ~name:"show-stat" ~doc:"Show verification statistic"
+  let show_stat = make_flag ~name:"show-stat" ~doc:"Show verification statistic"
 
   let info =
     let doc = "Bil verification tool" in
@@ -183,13 +178,19 @@ module Command = struct
     Term.(const create $ rules $ show_errors $ show_stat $ filename $ output)
 
   let filter_argv argv = 
-    let ours = [ rules'; show_errors'; show_stat'; output'] in
-    let prefix = "--" in
-    let is_our arg =      
-      if String.is_prefix arg ~prefix then
-        List.exists ours ~f:(fun a -> prefix ^ a = arg) 
-      else true in
-    Array.filter ~f:is_our argv
+    let known_passes = Project.passes () |> List.map ~f:Project.Pass.name in
+    let known_plugins =  Plugins.list () |> List.map ~f:Plugin.name in
+    let known_names = known_passes @ known_plugins in
+    let prefixes = List.map known_names  ~f:(fun name -> "--" ^ name) in
+    let is_prefix str prefix = String.is_prefix ~prefix str in
+    let is_others opt = 
+      is_prefix opt "--" && List.exists ~f:(fun p -> is_prefix opt p) prefixes in
+    List.fold ~init:([], false) ~f:(fun (acc, drop) opt -> 
+        if drop then acc, false
+        else
+        if is_others opt then acc, not (String.mem opt '=') 
+        else opt :: acc, false) (Array.to_list argv) |> 
+    fst |> List.rev |> Array.of_list
 
   let parse argv = 
     let argv = filter_argv argv in
