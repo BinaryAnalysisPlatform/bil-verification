@@ -1,0 +1,35 @@
+opam-version: "1.2"
+name: "bil-veri"
+version: "1.0.0~alpha"
+maintainer: "Ivan Gotovchits <ivg@ieee.org>"
+authors: "BAP Team"
+homepage: "https://github.com/BinaryAnalysisPlatform/bil-verification/"
+bug-reports: "https://github.com/BinaryAnalysisPlatform/bil-verification/issues"
+dev-repo: "https://github.com/BinaryAnalysisPlatform/bil-verification/"
+license: "MIT"
+
+build: [
+  ["oasis" "setup"]
+  ["./configure" "--prefix=%{prefix}%"]
+  [make]
+]
+
+install: [[make "install"]]
+
+remove: [["ocamlfind" "remove" "bil-veri"]]
+
+depends: [
+    "bap-std"
+    "bap-traces"
+    "bigstring"
+    "core_kernel" {>= "113.33.03"}
+    "cmdliner"
+    "oasis"
+    "ocamlfind"
+    "ounit"
+    "pcre"
+    "textutils"
+    "uri"
+]
+
+available: [ocaml-version >= "4.02.3"]
