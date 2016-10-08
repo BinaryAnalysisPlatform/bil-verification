@@ -52,6 +52,20 @@ end
 
 module Events = Value.Set
 
+module Bot_read = struct
+  type t = Addr of Word.t | Var of Var.t [@@deriving bin_io, compare, sexp]
+  let pp fmt = function
+    | Addr w -> Format.fprintf fmt "%a => Bot" Word.pp w
+    | Var v -> Format.fprintf fmt "%a => Bot" Var.pp v
+end
+
+let bot_read =
+  Value.Tag.register (module Bot_read)
+    ~name:"bot-event"
+    ~uuid:"402a029b-2f79-484e-b7da-7eed2f496dfd"
+
+let create_bot = Value.create bot_read
+
 class context stat policy trace = object(self:'s)
   inherit Veri_traci.context trace as super
   val events = Events.empty
@@ -70,25 +84,25 @@ class context stat policy trace = object(self:'s)
       ~insn:(Option.value_exn insn)
       ~code:(Option.value_exn code |> Chunk.data)
 
-  method private finish_step stat = 
+  method finish_step stat = 
     let s = {< other = None; error = None; insn = None; bil = [];
                stat = stat; events = Events.empty; code = None; >} in
     s#drop_pc
 
   method merge = 
+    let other = Option.value_exn self#other in
     match error with 
-    | Some er -> self#finish_step (Veri_stat.notify stat er)
+    | Some er -> other#finish_step (Veri_stat.notify stat er)
     | None -> match insn with
-      | None -> self#finish_step stat
+      | None -> other#finish_step stat
       | Some name ->
-        let other = Option.value_exn self#other in
         let events, events' = other#events, self#events in
         match Veri_policy.denied policy name events events' with
-        | [] -> self#finish_step (Veri_stat.success stat name)
+        | [] -> other#finish_step (Veri_stat.success stat name)
         | results ->
           let report = self#make_report results in
           Signal.send (snd stream) report;
-          self#finish_step (Veri_stat.failbil stat name) 
+          other#finish_step (Veri_stat.failbil stat name) 
 
   method discard_event: (event -> bool) -> 's = fun f ->
     match Set.find events ~f with
@@ -174,8 +188,7 @@ class ['a] t arch dis =
       SM.get () >>= fun ctxt ->
       match find_reg_write (self_events ctxt) (same_var var) with
       | Some mv -> self#eval_exp (Bil.int (Move.data mv))
-      | None ->
-        self#resolve_var var >>= fun r ->
+      | None -> self#resolve_var var >>= fun r ->
         match value r with
         | Bil.Imm data ->
           if not (Var.is_virtual var) then
@@ -183,6 +196,17 @@ class ['a] t arch dis =
             SM.return r
           else SM.return r
         | Bil.Mem _ | Bil.Bot -> SM.return r
+
+    method! eval_var var = 
+      super#eval_var var >>= fun r ->
+      match value r with
+      | Bil.Mem _ | Bil.Imm _ -> SM.return r
+      | Bil.Bot -> match Var.typ var with
+        | Type.Mem _ -> SM.return r
+        | Type.Imm _ -> 
+          let e = create_bot (Bot_read.(Var var)) in
+          self#update_event e >>= fun () ->
+          SM.return r
 
     method! update var result : 'a u =
       super#update var result >>= fun () ->
@@ -252,6 +276,10 @@ class ['a] t arch dis =
           match value addr_res, value r with
           | Bil.Imm addr, Bil.Imm data -> 
             self#update_event (create_mem_load addr data) >>= fun () -> 
+            SM.return r
+          | Bil.Imm addr, Bil.Bot -> 
+            let e = create_bot (Bot_read.(Addr addr)) in
+            self#update_event e >>= fun () ->
             SM.return r
           | _ ->  SM.return r
 

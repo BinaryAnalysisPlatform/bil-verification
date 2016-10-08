@@ -28,6 +28,7 @@ class context: Veri_stat.t -> Veri_policy.t -> Trace.t -> object('s)
     method set_code : Chunk.t -> 's 
     method set_insn: string -> 's
     method drop_pc : 's
+    method finish_step : Veri_stat.t -> 's
   end
 
 class ['a] t : arch -> Disasm.t -> object('s)
